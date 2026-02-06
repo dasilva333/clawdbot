@@ -1,0 +1,56 @@
+{
+  "id": "minicpm-tts",
+  "uiHints": {
+    "endpoint": {
+      "label": "GGUF TTS API Endpoint",
+      "placeholder": "http://192.168.1.119:8087",
+      "help": "FastAPI proxy wrapping llama.cpp-omni for TTS synthesis"
+    },
+    "defaultVoice": {
+      "label": "Default Voice",
+      "placeholder": "default",
+      "help": "Voice name or reference audio path on the server"
+    },
+    "format": {
+      "label": "Output Format",
+      "help": "Audio output format (opus for Telegram voice, wav for raw)"
+    },
+    "enabled": {
+      "label": "Enable MiniCPM-o TTS",
+      "help": "Enable local GGUF text-to-speech plugin"
+    },
+    "timeoutMs": {
+      "label": "Request Timeout (ms)",
+      "advanced": true
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean",
+        "default": false
+      },
+      "endpoint": {
+        "type": "string",
+        "default": "http://192.168.1.119:8087"
+      },
+      "defaultVoice": {
+        "type": "string",
+        "default": "default"
+      },
+      "format": {
+        "type": "string",
+        "enum": ["wav", "opus"],
+        "default": "opus"
+      },
+      "timeoutMs": {
+        "type": "integer",
+        "minimum": 5000,
+        "maximum": 300000,
+        "default": 120000
+      }
+    }
+  }
+}

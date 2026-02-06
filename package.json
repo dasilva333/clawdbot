@@ -1,0 +1,24 @@
+{
+  "name": "@openclaw/plugin-minicpm-tts",
+  "version": "1.0.0",
+  "description": "MiniCPM-o 4.5 TTS plugin for OpenClaw",
+  "type": "module",
+  "main": "index.ts",
+  "author": "OpenClaw",
+  "license": "MIT",
+  "keywords": [
+    "openclaw",
+    "plugin",
+    "tts",
+    "text-to-speech",
+    "minicpm",
+    "llama.cpp"
+  ],
+  "peerDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "dependencies": {}
+}

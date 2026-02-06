@@ -3,7 +3,7 @@
   "uiHints": {
     "endpoint": {
       "label": "GGUF TTS API Endpoint",
-      "placeholder": "http://192.168.1.119:8087",
+      "placeholder": "http://your-gpu-host:8087",
       "help": "FastAPI proxy wrapping llama.cpp-omni for TTS synthesis"
     },
     "defaultVoice": {
@@ -34,7 +34,7 @@
       },
       "endpoint": {
         "type": "string",
-        "default": "http://192.168.1.119:8087"
+        "default": "http://localhost:8087"
       },
       "defaultVoice": {
         "type": "string",

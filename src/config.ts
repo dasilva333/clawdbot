@@ -30,7 +30,7 @@ export interface ResolvedMiniCPMTTSConfig {
 export function resolveConfig(config: MiniCPMTTSConfig = {}): ResolvedMiniCPMTTSConfig {
   return {
     enabled: config.enabled ?? false,
-    endpoint: config.endpoint ?? "http://192.168.1.119:8087",
+    endpoint: config.endpoint ?? "http://localhost:8087",
     defaultVoice: config.defaultVoice ?? "default",
     format: config.format ?? "opus",
     timeoutMs: config.timeoutMs ?? 120000,

@@ -34,11 +34,11 @@ The plugin integrates as a core TTS provider (`"minicpm"`) in OpenClaw's TTS eng
     "tts": {
       "provider": "minicpm",
       "minicpm": {
-        "endpoint": "http://192.168.1.119:8087",
+        "endpoint": "http://your-gpu-host:8087",
         "defaultVoice": "default",
         "timeoutMs": 120000,
         "voices": {
-          "gekko": "/home/comfy/minicpm-audio-api/voice_refs/gekko_sample.wav"
+          "myvoice": "/path/to/voice_refs/sample.wav"
         }
       }
     }
@@ -61,7 +61,7 @@ The plugin integrates as a core TTS provider (`"minicpm"`) in OpenClaw's TTS eng
   "plugins": {
     "minicpm-tts": {
       "enabled": true,
-      "endpoint": "http://192.168.1.119:8087",
+      "endpoint": "http://your-gpu-host:8087",
       "defaultVoice": "default",
       "format": "opus",
       "timeoutMs": 120000
@@ -99,7 +99,7 @@ Response:
 ```json
 {
   "healthy": true,
-  "endpoint": "http://192.168.1.119:8087",
+  "endpoint": "http://your-gpu-host:8087",
   "format": "opus",
   "defaultVoice": "default"
 }

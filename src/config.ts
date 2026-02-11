@@ -6,6 +6,9 @@ export interface MiniCPMTTSConfig {
   /** Enable MiniCPM-o TTS */
   enabled?: boolean;
 
+  /** Enable Discord Voice Bridge (Phase 1) */
+  voiceEnabled?: boolean;
+
   /** GGUF TTS API endpoint (FastAPI proxy wrapping llama.cpp-omni) */
   endpoint?: string;
 
@@ -21,6 +24,7 @@ export interface MiniCPMTTSConfig {
 
 export interface ResolvedMiniCPMTTSConfig {
   enabled: boolean;
+  voiceEnabled: boolean;
   endpoint: string;
   defaultVoice: string;
   format: "wav" | "opus";
@@ -30,6 +34,7 @@ export interface ResolvedMiniCPMTTSConfig {
 export function resolveConfig(config: MiniCPMTTSConfig = {}): ResolvedMiniCPMTTSConfig {
   return {
     enabled: config.enabled ?? false,
+    voiceEnabled: config.voiceEnabled ?? false,
     endpoint: config.endpoint ?? "http://localhost:8087",
     defaultVoice: config.defaultVoice ?? "default",
     format: config.format ?? "opus",

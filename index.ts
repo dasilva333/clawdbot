@@ -1,20 +1,16 @@
 /**
- * MiniCPM-o TTS Plugin
+ * MiniCPM-o TTS Plugin (Phase 1 Voice Bridge)
  *
- * Integrates GGUF TTS API (forced token decoding via llama.cpp-omni)
- * as an OpenClaw plugin. Provides gateway methods for manual synthesis
- * and voice listing. Core TTS integration is handled by the "minicpm"
- * provider in src/tts/tts.ts.
- *
- * Architecture:
- * - GGUF TTS API (FastAPI, port 8087) → llama.cpp-omni (C++, port 8085)
- * - Forced token decoding: tokenize text → LLM forward pass → hidden states → TTS vocoder → WAV/Opus
- * - Voice cloning via reference audio files on the server
+ * Integrates GGUF TTS API as a voice ferry for Discord.
  */
 
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
-import { resolveConfig, type MiniCPMTTSConfig } from "./src/config";
-import { MiniCPMTTSProvider } from "./src/provider";
+import { Client, GatewayIntentBits } from "discord.js";
+import { resolveConfig, type MiniCPMTTSConfig } from "./src/config.js";
+import { MiniCPMTTSProvider } from "./src/provider.js";
+import { VoiceManager } from "./src/voice/manager.js";
+import { VoiceBridge } from "./src/voice/bridge.js";
+
+type OpenClawPluginApi = any;
 
 const miniCPMTTSPlugin = {
   id: "minicpm-tts",
@@ -24,25 +20,288 @@ const miniCPMTTSPlugin = {
     const rawConfig = api.pluginConfig as MiniCPMTTSConfig | undefined;
     const config = resolveConfig(rawConfig);
 
+    api.logger.info(`[MiniCPM TTS] Plugin registration. ID: ${api.id}`);
+    api.logger.info(`[MiniCPM TTS] Runtime structure: ${Object.keys(api.runtime || {}).join(", ")}`);
+    if (api.runtime?.discord) {
+      api.logger.info(`[MiniCPM TTS] Discord runtime methods: ${Object.keys(api.runtime.discord).join(", ")}`);
+    }
+
     if (!config.enabled) {
-      api.logger.info("MiniCPM-o TTS plugin disabled in config");
+      api.logger.info("MiniCPM-o TTS plugin disabled");
       return;
     }
 
     const provider = new MiniCPMTTSProvider(config);
+    let voiceManager: VoiceManager | undefined;
+    let voiceBridge: VoiceBridge | undefined;
+    let discordClient: Client | undefined;
+
+    api.logger.info("[MiniCPM TTS] Plugin registration started");
 
     /**
-     * Gateway Method: minicpm.synthesize
-     * Manual TTS synthesis — returns base64 audio
+     * Voice Setup
      */
-    api.registerGatewayMethod("minicpm.synthesize", async ({ params, respond }) => {
-      const { text, voice } = params as { text: string; voice?: string };
+    if (config.voiceEnabled) {
+      api.logger.info("[MiniCPM TTS] Voice capability enabled in config");
+      voiceManager = new VoiceManager(api.logger);
+      voiceBridge = new VoiceBridge(voiceManager, provider, api.logger);
 
-      if (!text || typeof text !== "string") {
-        respond({ error: "Missing or invalid 'text' parameter" });
-        return;
+      // Wire up the audio listener to the bridge prefill
+      voiceManager.setAudioHandler(async (guildId, pcm) => {
+        if (voiceBridge) {
+          await voiceBridge.prefill(guildId, pcm);
+        }
+      });
+
+      voiceManager.setSpeechEndHandler(async (guildId) => {
+        if (voiceBridge) {
+          api.logger.info(`[MiniCPM Voice] User speech ended for guild ${guildId}, triggering decode...`);
+          await voiceBridge.triggerDecode(guildId);
+        }
+      });
+
+      // Try to reuse OpenClaw's existing Discord client first to avoid token conflicts
+      api.logger.info("[MiniCPM TTS] Attempting to resolve initial Discord client...");
+      const existingClient = api.runtime?.discord?.getClient?.();
+      
+      if (existingClient?.isReady()) {
+        discordClient = existingClient;
+        api.logger.info(`[MiniCPM Voice] Initialized by reusing existing Discord client: ${discordClient?.user?.tag}`);
+      } else {
+        api.logger.info("[MiniCPM TTS] No ready Discord client found at registration time; will resolve lazily during commands.");
       }
+    }
 
+    /**
+     * Commands: /join, /leave
+     */
+    api.registerCommand({
+      name: "join",
+      description: "Join a voice channel (auto-joins yours if no ID provided)",
+      requireAuth: false,
+      handler: async (ctx: any) => {
+        api.logger.info(`[MiniCPM Voice] /join command entered. Context: senderId=${ctx.senderId}, from=${ctx.from}, args=${ctx.args}`);
+        
+        try {
+          // Fetch client lazily if not set
+          if (!discordClient) {
+            api.logger.info("[MiniCPM Voice] discordClient not cached, attempting lazy resolution...");
+            discordClient = api.runtime?.discord?.getClient?.();
+            if (discordClient) {
+              api.logger.info(`[MiniCPM Voice] Lazily resolved Discord client: ${discordClient.user?.tag} (isReady=${discordClient.isReady()})`);
+            } else {
+              api.logger.warn("[MiniCPM Voice] api.runtime.discord.getClient() returned null. Falling back to fresh client...");
+              const token = api.config?.channels?.discord?.token;
+              if (token) {
+                discordClient = new Client({
+                  intents: [
+                    GatewayIntentBits.Guilds,
+                    GatewayIntentBits.GuildVoiceStates,
+                    GatewayIntentBits.GuildMessages,
+                  ],
+                });
+                await discordClient.login(token);
+                api.logger.info(`[MiniCPM Voice] Fallback client ready: ${discordClient.user?.tag}`);
+              }
+            }
+          }
+
+          if (!discordClient || !voiceManager) {
+            api.logger.error(`[MiniCPM Voice] Join aborted: client=${!!discordClient}, manager=${!!voiceManager}`);
+            return { content: "Voice bridge is not enabled." };
+          }
+          
+          const fromParts = (ctx.from || "").split(":");
+          const sourceChannelId = fromParts[fromParts.length - 1];
+          api.logger.info(`[MiniCPM Voice] Parsed sourceChannelId: ${sourceChannelId}`);
+
+          // Determine target channel
+          let targetChannelId = ctx.args?.trim();
+          let guildId: string | undefined;
+
+          if (targetChannelId) {
+            targetChannelId = targetChannelId.replace(/[<#>]/g, "").split("/").pop() || targetChannelId;
+            api.logger.info(`[MiniCPM Voice] Resolving manual targetChannelId: ${targetChannelId}`);
+            
+            const channel = await discordClient.channels.fetch(targetChannelId).catch((e: any) => {
+              api.logger.error(`[MiniCPM Voice] Failed to fetch target channel ${targetChannelId}: ${e.message}`);
+              return null;
+            });
+            if (channel && "guild" in channel) {
+              guildId = (channel as any).guild.id;
+              api.logger.info(`[MiniCPM Voice] Resolved guildId: ${guildId}`);
+            } else {
+              api.logger.warn(`[MiniCPM Voice] Channel ${targetChannelId} not found or not in a guild`);
+              return { content: `Could not find voice channel with ID: ${targetChannelId}` };
+            }
+          } else {
+            api.logger.info(`[MiniCPM Voice] No target ID; auto-resolving from user voice state...`);
+          const sourceChannel = await discordClient.channels.fetch(sourceChannelId).catch((e: any) => {
+            api.logger.error(`[MiniCPM Voice] Failed to fetch source channel ${sourceChannelId}: ${e.message}`);
+            return null;
+          });
+          if (!sourceChannel || !("guild" in sourceChannel)) {
+            api.logger.error(`[MiniCPM Voice] Source channel ${sourceChannelId} has no guild context`);
+            return { content: "Could not find guild context." };
+          }
+
+            const guild = (sourceChannel as any).guild;
+            guildId = guild.id;
+            api.logger.info(`[MiniCPM Voice] Auto-resolved guildId: ${guildId} (${guild.name})`);
+            
+            api.logger.info(`[MiniCPM Voice] Fetching member profile for ${ctx.senderId}...`);
+            const member = await guild.members.fetch(ctx.senderId).catch((e: any) => {
+              api.logger.error(`[MiniCPM Voice] Member fetch failed: ${e.message}`);
+              return null;
+            });
+
+            if (!member || !member.voice.channelId) {
+              api.logger.warn(`[MiniCPM Voice] User ${ctx.senderId} voice state: ${member ? 'Not in channel' : 'Member not found'}`);
+              return { content: "You must be in a voice channel to use auto-join. Otherwise, provide a channel ID." };
+            }
+            targetChannelId = member.voice.channelId;
+            api.logger.info(`[MiniCPM Voice] Found member in voice channel: ${targetChannelId}`);
+          }
+
+          if (!guildId || !targetChannelId) {
+            api.logger.error(`[MiniCPM Voice] Resolution failed: guildId=${guildId}, targetChannelId=${targetChannelId}`);
+            return { content: "Failed to resolve guild or channel IDs." };
+          }
+
+          api.logger.info(`[MiniCPM Voice] Initiating voiceManager.join for guild ${guildId}, channel ${targetChannelId}...`);
+          const guildObj = await discordClient.guilds.fetch(guildId);
+          await voiceManager.join(guildId, targetChannelId, guildObj.voiceAdapterCreator);
+          api.logger.info("[MiniCPM Voice] voiceManager.join successful");
+          return { content: `Joined <#${targetChannelId}> 🍎` };
+        } catch (error: any) {
+          api.logger.error(`[MiniCPM Voice] CRITICAL: /join handler exception: ${error.message}\n${error.stack}`);
+          return { content: `Error: ${error.message}` };
+        }
+      },
+    });
+
+    api.registerCommand({
+      name: "leave",
+      description: "Leave the current voice channel",
+      requireAuth: false,
+      handler: async (ctx: any) => {
+        api.logger.info(`[MiniCPM Voice] /leave command entered. senderId=${ctx.senderId}, from=${ctx.from}`);
+        console.log(`[MiniCPM Voice] /leave command entered. senderId=${ctx.senderId}, from=${ctx.from}`);
+        
+        if (!voiceManager) {
+          api.logger.error("[MiniCPM Voice] Leave failed: voiceManager is null");
+          return { content: "Voice bridge is not enabled." };
+        }
+        
+        try {
+          const fromParts = (ctx.from || "").split(":");
+          const channelId = fromParts[fromParts.length - 1];
+          const client = discordClient || api.runtime?.discord?.getClient?.();
+          
+          api.logger.info(`[MiniCPM Voice] Resolving guild context for channel ${channelId}...`);
+          const channel = await client?.channels.fetch(channelId).catch((e: any) => {
+             api.logger.error(`[MiniCPM Voice] Channel fetch failed: ${e.message}`);
+             return null;
+          });
+          const guildId = (channel as any)?.guild?.id;
+
+          if (!guildId) {
+            api.logger.warn(`[MiniCPM Voice] /leave failed: could not resolve guildId`);
+            return { content: "Could not find guild context." };
+          }
+          
+          api.logger.info(`[MiniCPM Voice] Executing voiceManager.leave for guild ${guildId}`);
+          voiceManager.leave(guildId);
+          return { content: "Left voice channel." };
+        } catch (error: any) {
+          api.logger.error(`[MiniCPM Voice] /leave handler exception: ${error.message}\n${error.stack}`);
+          return { content: `Error: ${error.message}` };
+        }
+      },
+    });
+
+    api.registerCommand({
+      name: "speak",
+      description: "Say something in the voice channel",
+      requireAuth: false,
+      handler: async (ctx: any) => {
+        api.logger.info(`[MiniCPM Voice] /speak command entered. text="${ctx.args}" senderId=${ctx.senderId}`);
+        console.log(`[MiniCPM Voice] /speak command entered. text="${ctx.args}" senderId=${ctx.senderId}`);
+        
+        try {
+          const client = discordClient || api.runtime?.discord?.getClient?.();
+          if (!client || !voiceBridge) {
+            api.logger.error(`[MiniCPM Voice] /speak aborted: client=${!!client}, bridge=${!!voiceBridge}`);
+            return { content: "Voice bridge is not enabled." };
+          }
+          
+          const fromParts = (ctx.from || "").split(":");
+          const channelId = fromParts[fromParts.length - 1];
+          const channel = await client.channels.fetch(channelId).catch((e: any) => {
+            api.logger.error(`[MiniCPM Voice] /speak failed to fetch channel: ${e.message}`);
+            return null;
+          });
+          const guildId = (channel as any)?.guild?.id;
+
+          if (!guildId) {
+            api.logger.warn(`[MiniCPM Voice] /speak could not resolve guild context for channel ${channelId}`);
+            return { content: "Could not find guild context." };
+          }
+          
+          if (!ctx.args) return { content: "Please provide text to speak. Usage: /speak <text>" };
+          
+          api.logger.info(`[MiniCPM Voice] Forwarding speak request to bridge for guild ${guildId}: "${ctx.args.slice(0, 30)}..."`);
+          await voiceBridge.speak(guildId, ctx.args);
+          return { content: `📢 Speaking: "${ctx.args}"` };
+        } catch (error: any) {
+          api.logger.error(`[MiniCPM Voice] /speak handler critical failure: ${error.message}\n${error.stack}`);
+          return { content: `Error: ${error.message}` };
+        }
+      },
+    });
+
+    /**
+     * Hook: Speak on response (from chat)
+     */
+    api.on("message_sent", async (event: any, ctx: any) => {
+      api.logger.debug(`[MiniCPM Voice] Hook message_sent: channelId=${ctx.channelId} content="${event.content.slice(0, 30)}..."`);
+      
+      try {
+        if (!voiceBridge || !ctx.channelId.includes("discord")) return;
+        
+        const client = discordClient || api.runtime?.discord?.getClient?.();
+        if (!client) {
+          api.logger.warn("[MiniCPM Voice] message_sent hook skipping: no Discord client");
+          return;
+        }
+
+        api.logger.info(`[MiniCPM Voice] Hook resolving guild for channel ${ctx.channelId}...`);
+        const channel = await client.channels.fetch(ctx.channelId).catch(() => null);
+        const guildId = (channel as any)?.guild?.id;
+        
+        if (guildId) {
+          api.logger.info(`[MiniCPM Voice] Hook initiating auto-speech for guild ${guildId}`);
+          await voiceBridge.speak(guildId, event.content);
+        } else {
+          api.logger.debug(`[MiniCPM Voice] Hook could not resolve guildId for ${ctx.channelId}`);
+        }
+      } catch (error: any) {
+        api.logger.error(`[MiniCPM Voice] message_sent hook exception: ${error.message}`);
+      }
+    });
+
+    /**
+     * Fallback Hook: Log chat activity
+     */
+    api.on("message_received", async (event: any, ctx: any) => {
+      api.logger.info(`[MiniCPM Voice] Hook message_received: from=${event.from} channel=${ctx.channelId} content="${event.content.slice(0, 50)}..."`);
+    });
+
+    /**
+     * Legacy Gateway Methods
+     */
+    api.registerGatewayMethod("minicpm.synthesize", async ({ params, respond }: any) => {
+      const { text, voice } = params as { text: string; voice?: string };
       try {
         const result = await provider.synthesize(text, voice);
         respond({
@@ -50,59 +309,20 @@ const miniCPMTTSPlugin = {
           format: result.format,
           mimeType: result.mimeType,
           audioBase64: result.buffer.toString("base64"),
-          audioSize: result.buffer.length,
         });
       } catch (error) {
-        respond({
-          error: error instanceof Error ? error.message : "Unknown error",
-        });
+        respond({ error: error instanceof Error ? error.message : "Unknown error" });
       }
     });
 
-    /**
-     * Gateway Method: minicpm.health
-     */
-    api.registerGatewayMethod("minicpm.health", async ({ respond }) => {
-      const healthy = await provider.healthCheck();
-      respond({
-        healthy,
-        endpoint: config.endpoint,
-        format: config.format,
-        defaultVoice: config.defaultVoice,
-      });
-    });
-
-    /**
-     * Gateway Method: minicpm.voices
-     * List available voice references
-     */
-    api.registerGatewayMethod("minicpm.voices", async ({ respond }) => {
-      const voices = await provider.listVoices();
-      respond(voices);
-    });
-
-    /**
-     * Service: Lifecycle management
-     */
     api.registerService({
       id: "minicpm-tts",
-      start: async () => {
-        api.logger.info(`[MiniCPM TTS] Starting with endpoint: ${config.endpoint}`);
-        const healthy = await provider.healthCheck();
-        if (!healthy) {
-          api.logger.warn(
-            `[MiniCPM TTS] Endpoint ${config.endpoint} not reachable. Check if gguf-tts-api is running.`
-          );
-        } else {
-          api.logger.info(`[MiniCPM TTS] Health check passed`);
-        }
-      },
-      stop: async () => {
-        api.logger.info("[MiniCPM TTS] Stopping plugin");
+      start: () => api.logger.info("[MiniCPM TTS] Service started"),
+      stop: () => {
+        discordClient?.destroy();
+        api.logger.info("[MiniCPM TTS] Service stopped");
       },
     });
-
-    api.logger.info("[MiniCPM TTS] Plugin registered successfully");
   },
 };
 

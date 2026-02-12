@@ -14,6 +14,7 @@ import numpy as np
 import soundfile as sf
 import io
 import librosa
+import re
 
 app = FastAPI()
 
@@ -182,81 +183,141 @@ async def set_voice(req: VoiceSetRequest):
         print(f"[Bridge] Voice switch error: {e}")
         return {"status": "error", "message": str(e)}
 
+def _get_latest_round_id():
+    """Get the highest integer round ID from the output directory."""
+    rounds = glob.glob(os.path.join(BASE_OUTPUT_DIR, "round_*"))
+    if not rounds:
+        return -1
+    ids = []
+    for r in rounds:
+        try:
+            ids.append(int(os.path.basename(r).split("_")[1]))
+        except:
+            continue
+    return max(ids) if ids else -1
+
+def _find_active_dir(min_id: int = -1):
+    """Find the latest round_XXX directory, optionally ensuring it's > min_id."""
+    rounds = sorted(glob.glob(os.path.join(BASE_OUTPUT_DIR, "round_*")), reverse=True)
+    if not rounds:
+        return None
+        
+    if min_id != -1:
+        # Filter for rounds with ID > min_id
+        for r in rounds:
+            try: rid = int(os.path.basename(r).split("_")[1])
+            except: continue
+            if rid > min_id: return r
+        return None 
+    return rounds[0]
+
 @app.post("/audio/speech")
 async def audio_speech(request: OpenAITTSRequest):
     """
     OpenAI-compatible TTS endpoint.
-    Collects audio from the C++ TCP pipe and returns a proper WAV file.
+    Robust file-based capture to bypass flaky TCP pipe while maintaining Phase 1 goals.
     """
     print(f"[Bridge] TTS Request: '{request.input}'")
-    global audio_queue, decode_in_progress
-    
-    # Clear queue
-    while not audio_queue.empty():
-        audio_queue.get_nowait()
+    global decode_in_progress
     
     decode_in_progress = True
     start_time = time.time()
-    collected_pcm = []
-    received_any = False
-    
-    # 1. Trigger C++ generation (fire-and-forget)
-    def _trigger():
-        try:
-            requests.post(
-                f"{CPP_SERVER_URL}/v1/tts/inject_text",
-                json={"text": request.input},
-                timeout=30
-            )
-        except Exception as e:
-            print(f"[Bridge] C++ Trigger error: {e}")
-
-    asyncio.create_task(asyncio.to_thread(_trigger))
     
     try:
-        print("[Bridge] TTS: Awaiting audio from pipe...")
+        # 0. Sync with C++ State
+        start_round_id = _get_latest_round_id()
+        
+        # 1. Trigger C++ generation
+        print("[Bridge] Sending /v1/tts/inject_text to C++...")
+        requests.post(
+            f"{CPP_SERVER_URL}/v1/tts/inject_text",
+            json={"text": request.input},
+            timeout=30
+        )
+        
+        # 2. Monitor for the NEW round directory and files
+        print("[Bridge] Monitoring filesystem for generation...")
+        collected_files = set()
+        final_wav_path = None
+        last_data_time = time.time()
+        
         while True:
             elapsed = time.time() - start_time
             if elapsed > 25:
                 print(f"[Bridge] TTS: Hard stop reached ({elapsed:.1f}s).")
                 break
                 
-            try:
-                # Initial wait: up to 25s for first byte. 
-                # After data starts: 2s silence timeout.
-                current_timeout = 2.0 if received_any else (25.0 - elapsed)
-                chunk = await asyncio.wait_for(audio_queue.get(), timeout=max(0.1, current_timeout))
-                
-                if chunk is None:
-                    print("[Bridge] TTS: Stream finished (EOT).")
-                    break
-                
-                received_any = True
-                collected_pcm.append(chunk)
-            except asyncio.TimeoutError:
-                if received_any:
-                    print("[Bridge] TTS: Silence detected (2s). Processing.")
-                else:
-                    print("[Bridge] TTS: Initial data timeout (25s).")
+            # Switch to 2s silence timeout if we've seen ANY data
+            if len(collected_files) > 0 and (time.time() - last_data_time) > 2.0:
+                print("[Bridge] TTS: Silence detected (2s). Finishing.")
                 break
 
+            # Find the active directory for this turn
+            round_dir = _find_active_dir(min_id=start_round_id)
+            if not round_dir:
+                await asyncio.sleep(0.2)
+                continue
+                
+            output_dir = os.path.join(round_dir, "tts_wav")
+            if not os.path.exists(output_dir):
+                await asyncio.sleep(0.2)
+                continue
+                
+            # Check for completion flag
+            if os.path.exists(os.path.join(output_dir, "generation_done.flag")):
+                print("[Bridge] TTS: Generation flag detected.")
+                # Give it a tiny bit of time to flush the last file
+                await asyncio.sleep(0.2)
+                break
+            
+            # Find chunks
+            wavs = glob.glob(os.path.join(output_dir, "wav_*.wav"))
+            if not wavs:
+                wavs = glob.glob(os.path.join(output_dir, "tts_output_chunk_*.wav"))
+                
+            for w in wavs:
+                if w not in collected_files:
+                    print(f"[Bridge] TTS: Detected new chunk: {os.path.basename(w)}")
+                    collected_files.add(w)
+                    last_data_time = time.time()
+            
+            await asyncio.sleep(0.5)
+
+        # 3. Process Result
+        wav_files = sorted(list(collected_files), key=lambda x: int(re.search(r'(\d+)', os.path.basename(x)).group(1)) if re.search(r'(\d+)', os.path.basename(x)) else 0)
+        
+        if not wav_files:
+            print("[Bridge] TTS Error: No files found.")
+            return Response(status_code=500, content="No audio generated by engine")
+
+        # Merge Chunks
+        out_path = os.path.join(TEMP_PREFILL_DIR, f"merged_{int(time.time())}.wav")
+        os.makedirs(TEMP_PREFILL_DIR, exist_ok=True)
+        
+        # Concat logic
+        with open(os.path.join(TEMP_PREFILL_DIR, "list.txt"), "w") as f:
+            for w in wav_files: f.write(f"file '{os.path.abspath(w)}'\n")
+            
+        subprocess.run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", os.path.join(TEMP_PREFILL_DIR, "list.txt"), "-c", "copy", out_path], capture_output=True)
+        
+        if not os.path.exists(out_path):
+            return Response(status_code=500, content="Merge failed")
+            
+        with open(out_path, "rb") as f:
+            data = f.read()
+            
+        try: os.remove(out_path)
+        except: pass
+        
+        print(f"[Bridge] TTS: Success. Returning {len(data)} bytes.")
+        return Response(content=data, media_type="audio/wav")
+
+    except Exception as e:
+        print(f"[Bridge] TTS Exception: {e}")
+        traceback.print_exc()
+        return Response(status_code=500, content=str(e))
     finally:
         decode_in_progress = False
-        print("[Bridge] TTS: Collection complete.")
-
-    if not collected_pcm:
-        return Response(content=b"", media_type="audio/wav")
-
-    # 2. Concatenate and Convert to playable WAV
-    full_pcm = b"".join(collected_pcm)
-    audio_np = np.frombuffer(full_pcm, dtype=np.int16)
-    
-    out_buf = io.BytesIO()
-    sf.write(out_buf, audio_np, 24000, format='WAV') # MiniCPM-o uses 24kHz
-    out_buf.seek(0)
-    
-    print(f"[Bridge] TTS: Returning WAV file ({len(full_pcm)} bytes).")
-    return Response(content=out_buf.read(), media_type="audio/wav")
 
 @app.post("/omni/decode")
 async def trigger_decode(request: Request):

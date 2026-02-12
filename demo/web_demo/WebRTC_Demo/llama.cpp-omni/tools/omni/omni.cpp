@@ -63,6 +63,44 @@
     #include <sys/wait.h>
     #include <unistd.h>
     #include <dirent.h>
+#include <sys/socket.h>
+#include <arpa/inet.h>
+#include <unistd.h>
+#include <fcntl.h>
+
+static int g_t2w_tcp_socket = -1;
+
+static void t2w_tcp_send_pcm(const void* data, uint32_t len) {
+    if (g_t2w_tcp_socket == -1) {
+        g_t2w_tcp_socket = socket(AF_INET, SOCK_STREAM, 0);
+        if (g_t2w_tcp_socket < 0) return;
+        struct sockaddr_in serv_addr;
+        serv_addr.sin_family = AF_INET;
+        serv_addr.sin_port = htons(18099);
+        inet_pton(AF_INET, "127.0.0.1", &serv_addr.sin_addr);
+        struct timeval tv;
+        tv.tv_sec = 1;
+        tv.tv_usec = 0;
+        setsockopt(g_t2w_tcp_socket, SOL_SOCKET, SO_SNDTIMEO, (const char*)&tv, sizeof(tv));
+        if (connect(g_t2w_tcp_socket, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
+            fprintf(stderr, "[CPP-TCP] Connection failed: %s\n", strerror(errno));
+            close(g_t2w_tcp_socket);
+            g_t2w_tcp_socket = -1;
+            return;
+        }
+        fprintf(stderr, "[CPP-TCP] Connected to Bridge on 18099\n");
+    }
+    if (send(g_t2w_tcp_socket, &len, 4, 0) < 0) {
+        fprintf(stderr, "[CPP-TCP] Send length failed: %s\n", strerror(errno));
+        close(g_t2w_tcp_socket); g_t2w_tcp_socket = -1; return;
+    }
+    if (len > 0 && data != nullptr) {
+        if (send(g_t2w_tcp_socket, data, len, 0) < 0) {
+            fprintf(stderr, "[CPP-TCP] Send data failed: %s\n", strerror(errno));
+            close(g_t2w_tcp_socket); g_t2w_tcp_socket = -1;
+        }
+    }
+}
 #endif
 
 // ============================================================
@@ -8219,6 +8257,7 @@ void t2w_thread_func_python(struct omni_context * ctx_omni, common_params *param
             
             if (is_last_window) {
                 if (is_final) {
+                    t2w_tcp_send_pcm(nullptr, 0); // 🔧 TCP EOT
                     // 写入结束标记
                     std::string done_flag_path = tts_wav_output_dir + "/generation_done.flag";
                     FILE* flag_file = fopen(done_flag_path.c_str(), "w");
@@ -8492,6 +8531,7 @@ void t2w_thread_func_cpp(struct omni_context * ctx_omni, common_params *params) 
                         x = std::max(-1.0f, std::min(1.0f, x));
                         pcm[i] = (int16_t)(x * 32767.0f);
                     }
+                    t2w_tcp_send_pcm(pcm.data(), (uint32_t)(pcm.size() * sizeof(int16_t))); // 🔧 TCP Pipe
                     
                     uint32_t data_bytes = (uint32_t)(pcm.size() * sizeof(int16_t));
                     uint32_t riff_size = 36u + data_bytes;
@@ -9611,12 +9651,14 @@ bool omni_inject_text(struct omni_context * ctx_omni, std::string text) {
         }
     }
 
-    // 2. Format the user text prompt
-    std::string prompt = "<|im_start|>user\n" + text + "<|im_end|>\n<|im_start|>assistant\n";
-
-    // 3. Evaluate the prompt text
+    // 2. Format and Evaluate the user text prompt
+    // stream_decode expects n_past to be after the user message (it adds <|im_end|>)
+    std::string prompt = "<|im_start|>user\n" + text;
     print_with_timestamp("omni_inject_text: injecting text: %s\n", text.c_str());
     eval_string(ctx_omni, ctx_omni->params, prompt.c_str(), ctx_omni->params->n_batch, &ctx_omni->n_past, false);
 
-    return true;
+    // 3. Trigger generation
+    return stream_decode(ctx_omni, "", ctx_omni->simplex_round_idx);
 }
+
+// restored by patch script

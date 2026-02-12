@@ -72,32 +72,32 @@ async def handle_tcp_client(reader, writer):
     print(f"[Bridge TCP] New Connection from {addr}")
     try:
         while True:
-            # Read 4-byte header
             header = await reader.readexactly(4)
             if not header: break
             
             length = struct.unpack('<I', header)[0]
             if length == 0:
-                print("[Bridge TCP] RECEIVED: End-of-Turn signal (EOT).")
+                print("[Bridge TCP] RECEIVED: End-of-Turn (EOT).")
                 await audio_queue.put(None)
                 continue
             
-            # Read 'length' bytes
             data = await reader.readexactly(length)
             if data == b"PING":
-                print("[Bridge TCP] RECEIVED: Handshake PING. Pipe is live.")
-                # 🔧 Send PONG reply
+                print("[Bridge TCP] Handshake PING. Pipe is live.")
                 writer.write(struct.pack('<I', 4) + b"PONG")
                 await writer.drain()
                 continue
             
+            # LOGGING: See the bytes!
             print(f"[Bridge TCP] RECEIVED: {length} bytes of audio.")
             await audio_queue.put(data)
+    except asyncio.IncompleteReadError:
+        print("[Bridge TCP] Client disconnected (IncompleteRead).")
     except Exception as e:
         print(f"[Bridge TCP] Error: {e}")
-        # Always ensure a None is sent on disconnect to prevent hanging
-        await audio_queue.put(None)
     finally:
+        # Only put None if we aren't already closed
+        await audio_queue.put(None)
         writer.close()
 
 async def start_tcp_server():
@@ -155,76 +155,48 @@ async def set_voice(req: VoiceSetRequest):
 @app.post("/audio/speech")
 async def audio_speech(request: OpenAITTSRequest):
     """
-    OpenAI-compatible TTS endpoint (Restored).
-    Uses the new C++ -> Python Sidecar pipe for generation, but wraps it in a blocking HTTP response.
+    OpenAI-compatible TTS endpoint (Streaming version).
+    Pipes audio chunks from C++ TCP socket directly to the HTTP response.
     """
     print(f"[Bridge] TTS Request: '{request.input}'")
-    
-    # 1. We need to tell C++ to generate audio for this text.
-    # The C++ server exposes /v1/chat/completions which generates tokens -> TTS -> Sidecar -> TCP Pipe.
-    # We will Capture the TCP output and return it as WAV.
-    
     global audio_queue, decode_in_progress
     
     # Clear queue
-    while not audio_queue.empty(): audio_queue.get_nowait()
+    while not audio_queue.empty():
+        audio_queue.get_nowait()
     
-    decode_in_progress = True
-    collected_pcm = []
-    
-    try:
-        # Trigger C++ generation (using chat completions to inject text)
-        # Note: We assume the C++ server is configured to output audio for chat responses
-        # We might need to force a specific system prompt or config here if needed.
+    async def tts_streamer():
+        global decode_in_progress
+        decode_in_progress = True
         
-        async def trigger_cpp():
-            requests.post(
-                f"{CPP_SERVER_URL}/v1/chat/completions",
-                json={
-                    "messages": [{"role": "user", "content": request.input}],
-                    "stream": False # We don't need HTTP streaming, we listen to TCP
-                },
-                timeout=30
-            )
-            # Send EOT to unblock loop if C++ doesn't
-            await audio_queue.put(None)
+        # 1. Trigger C++ generation (fire-and-forget)
+        def _trigger():
+            try:
+                requests.post(
+                    f"{CPP_SERVER_URL}/v1/tts/inject_text",
+                    json={"text": request.input},
+                    timeout=30
+                )
+            except Exception as e:
+                print(f"[Bridge] C++ Trigger error: {e}")
 
-        # Start C++ generation in background
-        asyncio.create_task(trigger_cpp())
+        asyncio.create_task(asyncio.to_thread(_trigger))
         
-        # Collect Audio from TCP Pipe
-        print("[Bridge] TTS: Collecting audio from pipe...")
-        total_bytes = 0
-        while True:
-            chunk = await audio_queue.get()
-            if chunk is None: break
-            
-            chunk_len = len(chunk)
-            total_bytes += chunk_len
-            print(f"[Bridge] TTS: Collected chunk {chunk_len} bytes (Total: {total_bytes})")
-            collected_pcm.append(chunk)
-            
-        print(f"[Bridge] TTS: Stream complete. Total captured: {total_bytes} bytes.")
-            
-    except Exception as e:
-        print(f"[Bridge] TTS Error: {e}")
-        return Response(status_code=500, content=str(e))
-    finally:
-        decode_in_progress = False
-        
-    if not collected_pcm:
-        return Response(content=b"", media_type="audio/wav")
-        
-    # Concatenate and Convert to WAV
-    full_pcm = b"".join(collected_pcm)
-    audio_np = np.frombuffer(full_pcm, dtype=np.int16)
-    
-    # Write to memory buffer
-    out_buf = io.BytesIO()
-    sf.write(out_buf, audio_np, 24000, format='WAV') # Sidecar outputs 24kHz
-    out_buf.seek(0)
-    
-    return Response(content=out_buf.read(), media_type="audio/wav")
+        try:
+            print("[Bridge] TTS: Awaiting audio from pipe...")
+            while True:
+                chunk = await audio_queue.get()
+                if chunk is None:
+                    print("[Bridge] TTS: Stream finished (EOT).")
+                    break
+                
+                # Yield raw PCM bytes (24kHz Mono 16-bit)
+                yield chunk
+        finally:
+            decode_in_progress = False
+            print("[Bridge] TTS: Stream handler closed.")
+
+    return StreamingResponse(tts_streamer(), media_type="audio/pcm")
 
 @app.post("/omni/decode")
 async def trigger_decode(request: Request):

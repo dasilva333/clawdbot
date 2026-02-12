@@ -3587,7 +3587,9 @@ static struct llama_model * llama_init_tts(common_params * params, std::string m
 struct omni_context * omni_init(struct common_params * params, int media_type, bool use_tts, std::string tts_bin_dir,
                                 int tts_gpu_layers, const std::string & token2wav_device, bool duplex_mode,
                                 llama_model * existing_model, llama_context * existing_ctx,
-                                const std::string & base_output_dir) {
+                                const std::string & base_output_dir,
+                                const std::string & system_prompt_prefix, const std::string & system_prompt_suffix,
+                                float tts_temp) {
     // process the prompt
     print_with_timestamp("=== omni_init start\n");
     // if (params->prompt.empty() && params->interactive == false) {
@@ -3630,22 +3632,34 @@ struct omni_context * omni_init(struct common_params * params, int media_type, b
     // 
     // 注意: voice_clone_prompt 是 system prompt 的 prefix，assistant_prompt 是 system prompt 的 suffix
     //       stream_decode 会添加实际的 assistant generation prompt
-    if (duplex_mode) {
+    if (!system_prompt_prefix.empty()) {
+        ctx_omni->audio_voice_clone_prompt = system_prompt_prefix;
+        ctx_omni->omni_voice_clone_prompt = system_prompt_prefix;
+        print_with_timestamp("omni_init: using custom voice clone prompt prefix\n");
+    } else if (duplex_mode) {
         // 🔧 [与 Python 对齐] Audio 双工模式：嵌入参考音频
         // 双工模式不需要 <|im_start|>user\n，用 <unit> 标记用户输入
         ctx_omni->audio_voice_clone_prompt = "<|im_start|>system\nStreaming Duplex Conversation! You are a helpful assistant. Always respond in English.\n<|audio_start|>";
-        ctx_omni->audio_assistant_prompt = "<|audio_end|><|im_end|>\n";
         
         // 🔧 [修复] Omni 双工模式：也需要嵌入参考音频，格式与 Audio 双工相同
         ctx_omni->omni_voice_clone_prompt = "<|im_start|>system\nStreaming Duplex Conversation! You are a helpful assistant. Always respond in English.\n<|audio_start|>";
-        ctx_omni->omni_assistant_prompt = "<|audio_end|><|im_end|>\n";
     } else {
         // 🔧 [Hardcoded English] Strict English instruction for TTS stability
         ctx_omni->audio_voice_clone_prompt = "<|im_start|>system\nYou are a helpful assistant. You must strictly answer in English. Do not speak Chinese.\n<|audio_start|>";
-        ctx_omni->audio_assistant_prompt = "<|audio_end|>Your task is to act as an assistant using this voice. Please answer user questions seriously and with high quality. Always speak in English, regardless of the input language.<|im_end|>\n<|im_start|>user\n";
         
         // Omni 模式（非双工）：与 Audio 模式类似，末尾也添加 <|im_start|>user\n
         ctx_omni->omni_voice_clone_prompt = "<|im_start|>system\nYou are a helpful assistant. You must strictly answer in English. Do not speak Chinese.\n<|audio_start|>";
+    }
+
+    if (!system_prompt_suffix.empty()) {
+        ctx_omni->audio_assistant_prompt = system_prompt_suffix;
+        ctx_omni->omni_assistant_prompt = system_prompt_suffix;
+        print_with_timestamp("omni_init: using custom assistant prompt suffix\n");
+    } else if (duplex_mode) {
+        ctx_omni->audio_assistant_prompt = "<|audio_end|><|im_end|>\n";
+        ctx_omni->omni_assistant_prompt = "<|audio_end|><|im_end|>\n";
+    } else {
+        ctx_omni->audio_assistant_prompt = "<|audio_end|>Your task is to act as an assistant using this voice. Please answer user questions seriously and with high quality. Always speak in English, regardless of the input language.<|im_end|>\n<|im_start|>user\n";
         ctx_omni->omni_assistant_prompt = "<|audio_end|>Your task is to act as an assistant using this voice. Please answer user questions seriously and with high quality. Always speak in English, regardless of the input language.<|im_end|>\n<|im_start|>user\n";
     }
 
@@ -3727,13 +3741,24 @@ struct omni_context * omni_init(struct common_params * params, int media_type, b
         // 🔧 TTS流式采样参数 - 与 Python ras_sampling 对齐：
         // Python TTSSamplingParams 默认 temperature=0.8 (modeling_minicpmo.py line 75)
         common_params_sampling tts_sampling = params->sampling;
-        tts_sampling.temp = 0.1f;              // 🔧 [Hardcoded] Lower temp for stable TTS (was 0.8)
-        tts_sampling.top_p = 0.85f;  // 🔧 [与 Python 对齐] TTSSamplingParams.top_p=0.85             // 🔧 [与 Python streaming 对齐] top_p=0.8
+        
+        // 🔧 [Configurable Temp] Use passed tts_temp, default 0.1 if not specified (or 0.8 in older versions)
+        if (tts_temp > 0.0f) {
+            tts_sampling.temp = tts_temp;
+        } else {
+            tts_sampling.temp = 0.1f;  // Default to 0.1 for stability
+        }
+        
+        tts_sampling.top_p = 0.85f;  // 🔧 [与 Python 对齐] TTSSamplingParams.top_p=0.85
         tts_sampling.top_k = 25;               // top_k = 25 (ras_sampling 参数)
         tts_sampling.penalty_repeat = 1.05f;   // repetition_penalty = 1.05
         tts_sampling.min_p = 0.01f;            // min_p = 0.01
         // Python: CustomRepetitionPenaltyLogitsProcessorRepeat(repetition_penalty, num_code, 16)
         tts_sampling.penalty_last_n = 16;      // past_window = 16 (与Python对齐)
+        
+        // 🔧 [Configurable Temp] Store for re-init
+        ctx_omni->tts_sampling_params = tts_sampling;
+        
         struct common_sampler * tts_sampler = common_sampler_init(tts_model, tts_sampling);
         print_with_timestamp("TTS sampler: temp=%.2f, top_p=%.2f, top_k=%d, rep_penalty=%.2f\n",
                             tts_sampling.temp, tts_sampling.top_p, tts_sampling.top_k, tts_sampling.penalty_repeat);
@@ -4292,6 +4317,42 @@ void omni_set_language(struct omni_context * ctx_omni, const std::string & lang)
     ctx_omni->system_prompt_initialized = false;
     
     print_with_timestamp("omni_set_language: prompts updated for language '%s', system_prompt_initialized reset to false\n", lang.c_str());
+}
+
+// 🔧 [Configurable Prompt] Update system prompt strings
+void omni_set_system_prompt(struct omni_context * ctx_omni, const std::string & prefix, const std::string & suffix) {
+    if (ctx_omni == nullptr) return;
+    
+    if (!prefix.empty()) {
+        ctx_omni->audio_voice_clone_prompt = prefix;
+        ctx_omni->omni_voice_clone_prompt = prefix;
+        print_with_timestamp("omni_set_system_prompt: updated prefix\n");
+    }
+    
+    if (!suffix.empty()) {
+        ctx_omni->audio_assistant_prompt = suffix;
+        ctx_omni->omni_assistant_prompt = suffix;
+        print_with_timestamp("omni_set_system_prompt: updated suffix\n");
+    }
+    
+    // Reset initialization flag to force re-prefill
+    ctx_omni->system_prompt_initialized = false;
+}
+
+// 🔧 [Configurable Temp] Update TTS temperature
+void omni_update_tts_temp(struct omni_context * ctx_omni, float temp) {
+    if (ctx_omni == nullptr || ctx_omni->ctx_tts_sampler == nullptr) return;
+    
+    // Update params
+    ctx_omni->tts_sampling_params.temp = temp;
+    
+    // Free old sampler
+    common_sampler_free(ctx_omni->ctx_tts_sampler);
+    
+    // Re-init sampler with new params
+    ctx_omni->ctx_tts_sampler = common_sampler_init(ctx_omni->model_tts, ctx_omni->tts_sampling_params);
+    
+    print_with_timestamp("omni_update_tts_temp: TTS temperature updated to %.2f (sampler re-initialized)\n", temp);
 }
 
 static void process_audio(struct omni_context * ctx_omni, struct omni_embed * embeds, common_params * params, bool save_spk_emb=false) {

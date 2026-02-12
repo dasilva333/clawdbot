@@ -5875,6 +5875,21 @@ int main(int argc, char ** argv) {
             // Metal (GPU) 模式：不设置 CoreML 路径
             params.vision_coreml_model_path = "";
         }
+        
+        // 🔧 [Configurable Prompt] Parse custom prompts & temperature
+        std::string sys_prefix = "";
+        std::string sys_suffix = "";
+        float tts_temp = -1.0f;
+        
+        if (data.contains("system_prompt_prefix") && data.at("system_prompt_prefix").is_string()) {
+            sys_prefix = data.at("system_prompt_prefix");
+        }
+        if (data.contains("system_prompt_suffix") && data.at("system_prompt_suffix").is_string()) {
+            sys_suffix = data.at("system_prompt_suffix");
+        }
+        if (data.contains("temperature") && data.at("temperature").is_number()) {
+            tts_temp = data.at("temperature").get<float>();
+        }
 
         {
             std::lock_guard<std::mutex> lock(ctx_server.octx_mutex);
@@ -5884,9 +5899,10 @@ int main(int argc, char ** argv) {
                 ctx_server.octx = nullptr;
             }
             // 传入已加载的 LLM 模型和上下文，避免重复加载（节省 GPU 显存）
-            // 🔧 [多实例支持] 传递可配置的 output_dir
+            // 🔧 [多实例支持] 传递可配置的 output_dir + custom prompts + temp
             ctx_server.octx = omni_init(&params, media_type, use_tts, tts_bin_dir, tts_gpu_layers, token2wav_device,
-                                        duplex_mode, ctx_server.model, ctx_server.ctx, output_dir);
+                                        duplex_mode, ctx_server.model, ctx_server.ctx, output_dir,
+                                        sys_prefix, sys_suffix, tts_temp);
             if (ctx_server.octx == nullptr) {
                 res_error(res, format_error_response("omni_init failed", ERROR_TYPE_SERVER));
                 return;
@@ -6202,6 +6218,27 @@ int main(int argc, char ** argv) {
                             new_high_refresh);
                     ctx_server.octx->high_refresh = new_high_refresh;
                 }
+            }
+            
+            // 🔧 [Configurable Prompt] Update prompts via update_session_config
+            std::string sys_prefix = "";
+            std::string sys_suffix = "";
+            if (data.contains("system_prompt_prefix") && data.at("system_prompt_prefix").is_string()) {
+                sys_prefix = data.at("system_prompt_prefix");
+            }
+            if (data.contains("system_prompt_suffix") && data.at("system_prompt_suffix").is_string()) {
+                sys_suffix = data.at("system_prompt_suffix");
+            }
+            
+            // Only update if provided
+            if (!sys_prefix.empty() || !sys_suffix.empty()) {
+                omni_set_system_prompt(ctx_server.octx, sys_prefix, sys_suffix);
+            }
+            
+            // 🔧 [Configurable Temp] Update temperature
+            if (data.contains("temperature") && data.at("temperature").is_number()) {
+                float new_temp = data.at("temperature").get<float>();
+                omni_update_tts_temp(ctx_server.octx, new_temp);
             }
 
             // 3. 清空 KV cache

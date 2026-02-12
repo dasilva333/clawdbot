@@ -881,7 +881,11 @@ class InitSysPromptRequest(BaseModel):
     duplex_mode: Optional[bool] = None  # 是否启用双工模式（None 表示使用默认值）
     high_quality_mode: Optional[bool] = False  # 🔧 [高清模式] 启用图片切片 (max_slice_nums=2)
     high_fps_mode: Optional[bool] = False  # 🔧 [高刷模式] 1秒5帧 stack
-    language: Optional[str] = "zh"  # 🔧 [语言切换] "zh" 中文, "en" 英文
+    language: Optional[str] = "en"  # 🔧 [语言切换] "zh" 中文, "en" 英文
+    # 🔧 [Configurable Prompt] Custom prompts & temperature
+    system_prompt_prefix: Optional[str] = None
+    system_prompt_suffix: Optional[str] = None
+    temperature: Optional[float] = None
 
 class StreamingPrefillRequest(BaseModel):
     audio: Optional[str] = None  # base64编码的音频
@@ -1075,7 +1079,7 @@ async def init_sys_prompt(request: InitSysPromptRequest):
         high_fps_mode = request.high_fps_mode if request.high_fps_mode is not None else False
         
         # 🔧 [语言切换] 设置语言 ("zh" 或 "en")
-        language = request.language if request.language is not None else "zh"
+        language = request.language if request.language is not None else "en"
         
         is_audio_mode = (msg_type == 1)
         mode_name = "audio" if is_audio_mode else "omni"
@@ -1117,6 +1121,14 @@ async def init_sys_prompt(request: InitSysPromptRequest):
                 "output_dir": CPP_OUTPUT_DIR,  # 🔧 [多实例支持] 传递配置的输出目录
                 "language": language,        # 🔧 [语言切换] "zh" 或 "en"
             }
+            
+            # 🔧 [Configurable Prompt] Pass custom prompts & temperature
+            if request.system_prompt_prefix:
+                cpp_request["system_prompt_prefix"] = request.system_prompt_prefix
+            if request.system_prompt_suffix:
+                cpp_request["system_prompt_suffix"] = request.system_prompt_suffix
+            if request.temperature is not None:
+                cpp_request["temperature"] = request.temperature
             
             # 视觉编码器后端
             cpp_request["vision_backend"] = VISION_BACKEND
@@ -1198,6 +1210,14 @@ async def init_sys_prompt(request: InitSysPromptRequest):
                 "duplex_mode": duplex_mode,
                 "language": language,  # 🔧 [语言切换]
             }
+            
+            # 🔧 [Configurable Prompt] Pass custom prompts & temperature (Fast Resume)
+            if request.system_prompt_prefix:
+                update_request["system_prompt_prefix"] = request.system_prompt_prefix
+            if request.system_prompt_suffix:
+                update_request["system_prompt_suffix"] = request.system_prompt_suffix
+            if request.temperature is not None:
+                update_request["temperature"] = request.temperature
             
             # 使用固定音色文件重新 prefill system prompt
             if os.path.exists(FIXED_TIMBRE_PATH):

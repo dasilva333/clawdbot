@@ -1,5 +1,6 @@
 #include "ggml.h"
 #include "llama.h"
+#include "common/common.h"  // 🔧 Need full definition of common_params_sampling
 
 #include <thread>
 #include <memory>
@@ -147,6 +148,9 @@ struct omni_context {
     struct llama_model * model_tts = NULL;
     struct common_sampler * ctx_tts_sampler = NULL;
     
+    // 🔧 [Configurable Temp] Store TTS sampling params for re-initialization
+    struct common_params_sampling tts_sampling_params;
+    
     // struct TTSContext * ctx_tts = NULL;
     struct vocal_ctx * vocal = NULL;
     std::shared_ptr<std::vector<float>> spk_embeds;
@@ -278,7 +282,11 @@ struct omni_context {
     
     // 语言设置 (用于 prompt 生成)
     std::string language = "en";
-
+    
+    // 🔧 [Configurable Prompt] Custom system prompts overrides
+    std::string custom_voice_clone_prompt = "";
+    std::string custom_assistant_prompt = "";
+    
     // text streaming queue for server
     std::mutex text_mtx;
     std::condition_variable text_cv;
@@ -412,7 +420,10 @@ struct omni_context * omni_init(struct common_params * params, int media_type, b
                                 int tts_gpu_layers = -1, const std::string & token2wav_device = "gpu:0",
                                 bool duplex_mode = false,
                                 llama_model * existing_model = nullptr, llama_context * existing_ctx = nullptr,
-                                const std::string & base_output_dir = "./tools/omni/output");
+                                const std::string & base_output_dir = "./tools/omni/output",
+                                const std::string & system_prompt_prefix = "",
+                                const std::string & system_prompt_suffix = "",
+                                float tts_temp = -1.0f);
 
 void omni_free(struct omni_context * ctx_omni);
 
@@ -464,6 +475,12 @@ void sliding_window_register_system_prompt(struct omni_context * ctx_omni);
 bool sliding_window_enforce(struct omni_context * ctx_omni);
 bool sliding_window_drop_tokens_from_cache(struct omni_context * ctx_omni, int length);
 void sliding_window_reset(struct omni_context * ctx_omni);
+
+// 🔧 [Configurable Prompt] Update system prompt strings
+void omni_set_system_prompt(struct omni_context * ctx_omni, const std::string & prefix, const std::string & suffix);
+
+// 🔧 [Configurable Temp] Update TTS temperature
+void omni_update_tts_temp(struct omni_context * ctx_omni, float temp);
 
 // ==================== 高清模式函数声明 ====================
 // 设置 vision max_slice_nums 覆盖值，用于高清模式

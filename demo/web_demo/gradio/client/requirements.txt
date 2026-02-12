@@ -1,0 +1,17 @@
+fastapi==0.116.1
+gradio==4.44.1
+modelscope_studio @ http://thunlp.oss-cn-qingdao.aliyuncs.com/multi_modal/never_delete/modelscope_studio-0.4.0.9-py3-none-any.whl#sha256=ff8745a9580789d9b9edae9a4101192bbd300aba91cb8779187f1a2e0d67028f
+pandas==2.3.1
+numpy==2.2.6
+requests==2.32.4
+decord==0.6.0
+
+aiofiles==23.2.1
+ffmpy==0.6.1
+huggingface-hub==0.34.3
+python-multipart==0.0.20
+uvicorn==0.35.0
+
+matplotlib==3.10.5
+pydub==0.25.1
+pydantic==2.10.6

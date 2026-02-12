@@ -1,0 +1,27 @@
+Metadata-Version: 2.4
+Name: minicpmo-web-backend
+Version: 0.1.0
+Summary: MiniCPMO Web Backend FastAPI
+Author-email: xushihao <2580507844@qq.com>
+Requires-Python: >=3.9.0
+Description-Content-Type: text/markdown
+Requires-Dist: fastapi>=0.104.0
+Requires-Dist: uvicorn[standard]>=0.24.0
+Requires-Dist: pydantic>=2.5.0
+Requires-Dist: pydantic-settings>=2.1.0
+Requires-Dist: python-dotenv>=1.0.0
+Requires-Dist: pyyaml>=6.0.0
+Requires-Dist: livekit>=0.20.0
+Requires-Dist: livekit-agents>=0.4.0
+Requires-Dist: livekit-plugins-silero>=0.1.0
+Requires-Dist: webrtcvad>=2.0.10
+Requires-Dist: numpy>=1.24.0
+Requires-Dist: scipy>=1.10.0
+Requires-Dist: opencv-python-headless>=4.8.0
+Requires-Dist: Pillow>=10.0.0
+Requires-Dist: soundfile>=0.12.0
+Requires-Dist: opuslib>=3.0.1
+Requires-Dist: pydub>=0.25.0
+Requires-Dist: aiohttp>=3.8.0
+Requires-Dist: librosa>=0.10.0
+Requires-Dist: concurrent-log-handler>=0.9.20

@@ -1,0 +1,6 @@
+pyproject.toml
+minicpmo_web_backend.egg-info/PKG-INFO
+minicpmo_web_backend.egg-info/SOURCES.txt
+minicpmo_web_backend.egg-info/dependency_links.txt
+minicpmo_web_backend.egg-info/requires.txt
+minicpmo_web_backend.egg-info/top_level.txt

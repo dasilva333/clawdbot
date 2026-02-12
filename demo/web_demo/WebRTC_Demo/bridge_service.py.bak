@@ -1,0 +1,131 @@
+import os
+import time
+import requests
+import uvicorn
+import glob
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse, Response
+from pydantic import BaseModel
+from typing import Optional
+
+app = FastAPI()
+
+# Configuration
+# NOTE: Port 9060 is the Python FastAPI wrapper. The raw llama-server
+# runs on wrapper_port + 10000 = 19060, where our custom endpoints live.
+CPP_SERVER_URL = "http://127.0.0.1:19060"
+# Path to the output directory where C++ server saves WAV files
+# The C++ server creates a port-suffixed directory (e.g., output_9060)
+# This needs to be absolute or relative to where this script is run
+# Assuming script is run from .../WebRTC_Demo/
+OUTPUT_DIR = os.path.abspath("llama.cpp-omni/tools/omni/output_9060")
+
+class TTSRequest(BaseModel):
+    text: str
+    voice_id: str = "default"
+
+class OpenAITTSRequest(BaseModel):
+    """OpenAI-compatible TTS request format."""
+    model: str = "minicpm"
+    input: str
+    voice: str = "default"
+    response_format: Optional[str] = "opus"
+
+def _do_tts(text: str):
+    """Core TTS logic: inject text, decode, find WAV."""
+    # 1. Inject Text
+    try:
+        inject_resp = requests.post(
+            f"{CPP_SERVER_URL}/v1/tts/inject_text",
+            json={"text": text},
+            timeout=5
+        )
+        inject_resp.raise_for_status()
+    except Exception as e:
+        print(f"[Bridge] Injection failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Text injection failed: {str(e)}")
+
+    # 2. Trigger Decode (Generation)
+    try:
+        start_time = time.time()
+        decode_resp = requests.post(
+            f"{CPP_SERVER_URL}/v1/stream/decode",
+            json={},
+            timeout=30
+        )
+        decode_resp.raise_for_status()
+    except Exception as e:
+        print(f"[Bridge] Decode failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Decode failed: {str(e)}")
+
+    # 3. Find the generated WAV file
+    time.sleep(0.5)
+    latest_wav = find_latest_wav(OUTPUT_DIR, start_time)
+
+    if not latest_wav:
+        for _ in range(5):
+            time.sleep(1)
+            latest_wav = find_latest_wav(OUTPUT_DIR, start_time)
+            if latest_wav:
+                break
+
+    if not latest_wav:
+        raise HTTPException(status_code=500, detail="Audio generation timed out (no WAV file found)")
+
+    return latest_wav
+
+@app.post("/v1/tts/synthesize")
+async def synthesize(req: TTSRequest):
+    """Original bridge endpoint."""
+    print(f"[Bridge] Received TTS request: {req.text}")
+    latest_wav = _do_tts(req.text)
+    print(f"[Bridge] Returning audio: {latest_wav}")
+    return FileResponse(latest_wav, media_type="audio/wav")
+
+@app.post("/audio/speech")
+@app.post("/v1/audio/speech")
+async def openai_tts(req: OpenAITTSRequest):
+    """
+    OpenAI-compatible TTS endpoint.
+    OpenClaw calls {OPENAI_TTS_BASE_URL}/audio/speech with:
+      {"model": "...", "input": "text", "voice": "...", "response_format": "opus|mp3"}
+    Returns raw audio bytes.
+    """
+    print(f"[Bridge] OpenAI-compat TTS: model={req.model} voice={req.voice} fmt={req.response_format}")
+    print(f"[Bridge] Text: {req.input}")
+
+    latest_wav = _do_tts(req.input)
+    print(f"[Bridge] Returning audio: {latest_wav}")
+
+    # Read and return raw audio bytes (OpenClaw expects raw bytes, not JSON)
+    with open(latest_wav, "rb") as f:
+        audio_bytes = f.read()
+
+    # Return as wav
+    return Response(
+        content=audio_bytes,
+        media_type="audio/wav",
+        headers={"Content-Disposition": "attachment; filename=speech.wav"}
+    )
+
+@app.get("/health")
+@app.get("/v1/health")
+async def health():
+    """Health check endpoint."""
+    return {"status": "ok"}
+
+def find_latest_wav(base_dir, after_timestamp):
+    wav_files = glob.glob(os.path.join(base_dir, "**/*.wav"), recursive=True)
+    if not wav_files:
+        return None
+    latest_file = max(wav_files, key=os.path.getmtime)
+    if os.path.getmtime(latest_file) >= after_timestamp:
+        return latest_file
+    return None
+
+if __name__ == "__main__":
+    print(f"Starting TTS Bridge on port 8090...")
+    print(f"  Original endpoint: POST /v1/tts/synthesize")
+    print(f"  OpenAI-compat:     POST /audio/speech")
+    print(f"Watching output dir: {OUTPUT_DIR}")
+    uvicorn.run(app, host="0.0.0.0", port=8090)

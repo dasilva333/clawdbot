@@ -1,0 +1,30 @@
+# Dependencies
+venv/
+node_modules/
+__pycache__/
+*.pyc
+
+# Build artifacts
+build/
+dist/
+.DS_Store
+
+# Large Models & Checkpoints
+*.gguf
+*.bin
+*.pt
+*.pth
+*.safetensors
+*.onnx
+*.zip
+*.tar.gz
+
+# Project-specific model dirs
+demo/web_demo/WebRTC_Demo/models/
+demo/web_demo/WebRTC_Demo/assets/
+demo/web_demo/WebRTC_Demo/llama.cpp-omni/tools/omni/pyt2w/token2wav/*.onnx
+demo/web_demo/WebRTC_Demo/llama.cpp-omni/tools/omni/pyt2w/token2wav/*.pt
+demo/web_demo/WebRTC_Demo/llama.cpp-omni/tools/omni/pyt2w/token2wav/*.yaml
+
+# Temp logs
+*.log

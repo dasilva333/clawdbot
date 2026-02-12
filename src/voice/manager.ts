@@ -10,7 +10,8 @@ import {
   type VoiceConnection,
   type AudioPlayer,
 } from "@discordjs/voice";
-import { Readable } from "node:stream";
+import { Readable, PassThrough } from "node:stream";
+import fs from "node:fs";
 import type { PluginLogger } from "openclaw";
 import prism from "prism-media";
 
@@ -177,8 +178,8 @@ export class VoiceManager {
     });
   }
 
-  playStream(guildId: string, stream: Readable) {
-    this.logger.info(`[Voice] playStream request for guild ${guildId}`);
+  playStream(guildId: string, stream: Readable, isRaw: boolean = false) {
+    this.logger.info(`[Voice] playStream request for guild ${guildId} (isRaw=${isRaw})`);
     const activeSession = this.sessions.get(guildId);
     if (!activeSession) {
       this.logger.warn(`[Voice] Cannot play stream: no active session for guild ${guildId}`);
@@ -186,25 +187,69 @@ export class VoiceManager {
     }
 
     try {
-      this.logger.info("[Voice] Preparing FFmpeg transcoder to 48k stereo...");
-      // Let FFmpeg detect the input format and transcode to 48kHz stereo PCM for Discord
-      const ffmpeg = new prism.FFmpeg({
-        args: [
-          "-analyzeduration", "0",
-          "-loglevel", "0",
-          "-i", "-",
-          "-f", "s16le",
-          "-ar", "48000",
-          "-ac", "2",
-        ],
+      this.logger.info(`[Voice] Preparing FFmpeg transcoder to 48k stereo...`);
+      
+      const args = [
+        "-analyzeduration", "0",
+        "-loglevel", "0"
+      ];
+
+      if (isRaw) {
+        // Raw PCM input (s16le 24k mono) from bridge stream
+        args.push("-f", "s16le", "-ar", "24000", "-ac", "1");
+      }
+
+      args.push(
+        "-i", "-",
+        "-f", "s16le",
+        "-ar", "48000",
+        "-ac", "2"
+      );
+
+      const ffmpeg = new prism.FFmpeg({ args });
+
+      // Create a fork for debugging
+      const debugFile = "/tmp/debug_discord_out.raw";
+      this.logger.info(`[Voice] DEBUG: Started recording post-FFmpeg output to ${debugFile}`);
+      
+      const debugStream = fs.createWriteStream(debugFile);
+      const passThrough = new PassThrough();
+      let totalBytes = 0;
+
+      passThrough.on('data', (chunk) => {
+        totalBytes += chunk.length;
+        this.logger.debug?.(`[Voice] Received ${chunk.length} bytes from bridge (Total: ${totalBytes})`);
       });
 
-      const resource = createAudioResource(stream.pipe(ffmpeg), {
+      passThrough.on('end', () => {
+        const ms = Math.round(totalBytes / (48000 * 2 * 2 / 1000));
+        this.logger.info(`[Voice] DEBUG: Audio play finished. Captured ${totalBytes} bytes (~${ms}ms) at /tmp/debug_discord_out.raw`);
+      });
+
+      // Error handling
+      stream.on('error', (e) => this.logger.error(`[Voice] Bridge Stream Error: ${e.message}`));
+      ffmpeg.on('error', (e) => this.logger.error(`[Voice] FFmpeg Error: ${e.message}`));
+      passThrough.on('error', (e) => this.logger.error(`[Voice] PassThrough Error: ${e.message}`));
+
+      // Pipe everything
+      const audioSource = stream.pipe(ffmpeg).pipe(passThrough);
+      audioSource.pipe(debugStream);
+
+      const resource = createAudioResource(audioSource, {
         inputType: StreamType.Raw,
       });
 
       this.logger.info(`[Voice] Playing resource in guild ${guildId}...`);
       activeSession.player.play(resource);
+
+      // Error handling for stream and player to prevent process crashes
+      stream.on('error', (error) => {
+        this.logger.error(`[Voice] Stream error in guild ${guildId}: ${error.message}`);
+      });
+      
+      activeSession.player.on('error', (error) => {
+        this.logger.error(`[Voice] Player error in guild ${guildId}: ${error.message}`);
+      });
     } catch (err: any) {
       this.logger.error(`[Voice] playStream critical failure in guild ${guildId}: ${err.message}`);
     }

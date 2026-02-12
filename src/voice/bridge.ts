@@ -32,7 +32,8 @@ export class VoiceBridge {
       const stream = await this.provider.triggerDecode(guildId);
       if (stream) {
         this.logger.info(`[VoiceBridge] Received audio stream from decode trigger, playing...`);
-        this.manager.playStream(guildId, stream);
+        // Use isRaw=true for the Open Pipe PCM stream
+        this.manager.playStream(guildId, stream, true);
       } else {
         this.logger.warn(`[VoiceBridge] Decode trigger returned no audio for guild ${guildId}`);
       }
@@ -48,7 +49,8 @@ export class VoiceBridge {
     try {
       this.logger.info(`[VoiceBridge] Generating stream for guild ${guildId}: "${text.slice(0, 50)}..."`);
       const stream = await this.provider.synthesizeStream(text, voice);
-      this.manager.playStream(guildId, stream);
+      // Use isRaw=true for the unified Open Pipe PCM stream
+      this.manager.playStream(guildId, stream, true);
     } catch (error) {
       this.logger.error(`[VoiceBridge] Failed to play voice in ${guildId}: ${error}`);
     }

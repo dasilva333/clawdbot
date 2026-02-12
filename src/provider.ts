@@ -109,18 +109,40 @@ export class MiniCPMTTSProvider {
     }
   }
 
-  async listVoices(): Promise<Record<string, unknown>> {
+  async listVoices(): Promise<string[]> {
     try {
-      const response = await fetch(`${this.config.endpoint.replace(/\/+$/, "")}/v1/voices`, {
+      const response = await fetch(`${this.config.endpoint.replace(/\/+$/, "")}/voices`, {
         method: "GET",
         signal: AbortSignal.timeout(5000),
       });
       if (!response.ok) {
-        return {};
+        return [];
       }
-      return (await response.json()) as Record<string, unknown>;
+      const data = (await response.json()) as { voices: string[] };
+      return data.voices || [];
     } catch {
-      return {};
+      return [];
+    }
+  }
+
+  async setVoice(voiceId: string): Promise<string> {
+    try {
+      const response = await fetch(`${this.config.endpoint.replace(/\/+$/, "")}/voice/set`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ voice_id: voiceId }),
+      });
+      
+      if (!response.ok) {
+        const err = await response.text();
+        throw new Error(`Voice switch failed: ${err}`);
+      }
+      
+      const data = (await response.json()) as { status: string; voice: string };
+      return data.voice;
+    } catch (error: any) {
+      console.error(`[MiniCPM Provider] setVoice failed: ${error.message}`);
+      throw error;
     }
   }
 

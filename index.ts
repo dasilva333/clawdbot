@@ -60,16 +60,9 @@ const miniCPMTTSPlugin = {
         }
       });
 
-      // Try to reuse OpenClaw's existing Discord client first to avoid token conflicts
-      api.logger.info("[MiniCPM TTS] Attempting to resolve initial Discord client...");
-      const existingClient = api.runtime?.discord?.getClient?.();
-      
-      if (existingClient?.isReady()) {
-        discordClient = existingClient;
-        api.logger.info(`[MiniCPM Voice] Initialized by reusing existing Discord client: ${discordClient?.user?.tag}`);
-      } else {
-        api.logger.info("[MiniCPM TTS] No ready Discord client found at registration time; will resolve lazily during commands.");
-      }
+      // 🔧 [Compatibility Fix] OpenClaw core now uses Carbon client, which is incompatible with discord.js voice.
+      // We will ALWAYS use a dedicated discord.js client for voice handling.
+      api.logger.info("[MiniCPM TTS] Using dedicated Discord.js client for voice support (Carbon bypass).");
     }
 
     /**
@@ -83,26 +76,21 @@ const miniCPMTTSPlugin = {
         api.logger.info(`[MiniCPM Voice] /join command entered. Context: senderId=${ctx.senderId}, from=${ctx.from}, args=${ctx.args}`);
         
         try {
-          // Fetch client lazily if not set
+          // 🔧 [Compatibility Fix] OpenClaw core now uses Carbon client, which is incompatible with discord.js.
+          // We always use a dedicated Discord.js client instance for voice.
           if (!discordClient) {
-            api.logger.info("[MiniCPM Voice] discordClient not cached, attempting lazy resolution...");
-            discordClient = api.runtime?.discord?.getClient?.();
-            if (discordClient) {
-              api.logger.info(`[MiniCPM Voice] Lazily resolved Discord client: ${discordClient.user?.tag} (isReady=${discordClient.isReady()})`);
-            } else {
-              api.logger.warn("[MiniCPM Voice] api.runtime.discord.getClient() returned null. Falling back to fresh client...");
-              const token = api.config?.channels?.discord?.token;
-              if (token) {
-                discordClient = new Client({
-                  intents: [
-                    GatewayIntentBits.Guilds,
-                    GatewayIntentBits.GuildVoiceStates,
-                    GatewayIntentBits.GuildMessages,
-                  ],
-                });
-                await discordClient.login(token);
-                api.logger.info(`[MiniCPM Voice] Fallback client ready: ${discordClient.user?.tag}`);
-              }
+            api.logger.info("[MiniCPM Voice] Initializing dedicated Discord.js client...");
+            const token = api.config?.channels?.discord?.token;
+            if (token) {
+              discordClient = new Client({
+                intents: [
+                  GatewayIntentBits.Guilds,
+                  GatewayIntentBits.GuildVoiceStates,
+                  GatewayIntentBits.GuildMessages,
+                ],
+              });
+              await discordClient.login(token);
+              api.logger.info(`[MiniCPM Voice] Dedicated client logged in: ${discordClient.user?.tag}`);
             }
           }
 
@@ -221,41 +209,27 @@ const miniCPMTTSPlugin = {
     });
 
     api.registerCommand({
-      name: "speak",
-      description: "Say something in the voice channel",
+      name: "setvoice",
+      description: "List or set the voice (e.g. /setvoice jarvis)",
       requireAuth: false,
       handler: async (ctx: any) => {
-        api.logger.info(`[MiniCPM Voice] /speak command entered. text="${ctx.args}" senderId=${ctx.senderId}`);
-        console.log(`[MiniCPM Voice] /speak command entered. text="${ctx.args}" senderId=${ctx.senderId}`);
+        const arg = ctx.args?.trim();
         
+        if (!arg) {
+          // List voices
+          const voices = await provider.listVoices();
+          if (voices.length === 0) {
+            return { content: "No custom voices found in `assets/voices`." };
+          }
+          return { content: `**Available Voices:**\n${voices.map(v => `• \`/setvoice ${v}\``).join("\n")}` };
+        }
+        
+        // Set voice
         try {
-          const client = discordClient || api.runtime?.discord?.getClient?.();
-          if (!client || !voiceBridge) {
-            api.logger.error(`[MiniCPM Voice] /speak aborted: client=${!!client}, bridge=${!!voiceBridge}`);
-            return { content: "Voice bridge is not enabled." };
-          }
-          
-          const fromParts = (ctx.from || "").split(":");
-          const channelId = fromParts[fromParts.length - 1];
-          const channel = await client.channels.fetch(channelId).catch((e: any) => {
-            api.logger.error(`[MiniCPM Voice] /speak failed to fetch channel: ${e.message}`);
-            return null;
-          });
-          const guildId = (channel as any)?.guild?.id;
-
-          if (!guildId) {
-            api.logger.warn(`[MiniCPM Voice] /speak could not resolve guild context for channel ${channelId}`);
-            return { content: "Could not find guild context." };
-          }
-          
-          if (!ctx.args) return { content: "Please provide text to speak. Usage: /speak <text>" };
-          
-          api.logger.info(`[MiniCPM Voice] Forwarding speak request to bridge for guild ${guildId}: "${ctx.args.slice(0, 30)}..."`);
-          await voiceBridge.speak(guildId, ctx.args);
-          return { content: `📢 Speaking: "${ctx.args}"` };
-        } catch (error: any) {
-          api.logger.error(`[MiniCPM Voice] /speak handler critical failure: ${error.message}\n${error.stack}`);
-          return { content: `Error: ${error.message}` };
+          const newVoice = await provider.setVoice(arg);
+          return { content: `✅ Switched voice to: **${newVoice}**` };
+        } catch (e: any) {
+          return { content: `❌ Failed to switch voice: ${e.message}` };
         }
       },
     });
@@ -269,9 +243,10 @@ const miniCPMTTSPlugin = {
       try {
         if (!voiceBridge || !ctx.channelId.includes("discord")) return;
         
-        const client = discordClient || api.runtime?.discord?.getClient?.();
+        // Use the dedicated Discord.js client if initialized
+        const client = discordClient;
         if (!client) {
-          api.logger.warn("[MiniCPM Voice] message_sent hook skipping: no Discord client");
+          // If no dedicated client, we are not in a voice channel
           return;
         }
 
@@ -291,10 +266,28 @@ const miniCPMTTSPlugin = {
     });
 
     /**
-     * Fallback Hook: Log chat activity
+     * Fallback Hook: Log chat activity & Text Command Fallback
      */
     api.on("message_received", async (event: any, ctx: any) => {
-      api.logger.info(`[MiniCPM Voice] Hook message_received: from=${event.from} channel=${ctx.channelId} content="${event.content.slice(0, 50)}..."`);
+      api.logger.debug(`[MiniCPM Voice] Hook message_received: from=${event.from} channel=${ctx.channelId} content="${event.content.slice(0, 50)}..."`);
+      
+      // Fallback for /setvoice
+      if (event.content.startsWith("/setvoice")) {
+        const arg = event.content.replace("/setvoice", "").trim();
+        api.logger.info(`[MiniCPM Voice] Text command detected: /setvoice "${arg}"`);
+        
+        try {
+          if (!arg) {
+             const voices = await provider.listVoices();
+             api.logger.info(`[MiniCPM Voice] Available voices: ${voices.join(", ")}`);
+          } else {
+             const newVoice = await provider.setVoice(arg);
+             api.logger.info(`[MiniCPM Voice] Voice switched to: ${newVoice}`);
+          }
+        } catch (e: any) {
+           api.logger.error(`[MiniCPM Voice] /setvoice failed: ${e.message}`);
+        }
+      }
     });
 
     /**

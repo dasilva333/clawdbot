@@ -185,8 +185,8 @@ async def set_voice(req: VoiceSetRequest):
 @app.post("/audio/speech")
 async def audio_speech(request: OpenAITTSRequest):
     """
-    OpenAI-compatible TTS endpoint (Streaming version).
-    Pipes audio chunks from C++ TCP socket directly to the HTTP response.
+    OpenAI-compatible TTS endpoint.
+    Collects audio from the C++ TCP pipe and returns a proper WAV file.
     """
     print(f"[Bridge] TTS Request: '{request.input}'")
     global audio_queue, decode_in_progress
@@ -195,60 +195,77 @@ async def audio_speech(request: OpenAITTSRequest):
     while not audio_queue.empty():
         audio_queue.get_nowait()
     
-    async def tts_streamer():
-        global decode_in_progress
-        decode_in_progress = True
-        start_time = time.time()
-        
-        # 1. Trigger C++ generation (fire-and-forget)
-        def _trigger():
-            try:
-                requests.post(
-                    f"{CPP_SERVER_URL}/v1/tts/inject_text",
-                    json={"text": request.input},
-                    timeout=30
-                )
-            except Exception as e:
-                print(f"[Bridge] C++ Trigger error: {e}")
-
-        asyncio.create_task(asyncio.to_thread(_trigger))
-        
+    decode_in_progress = True
+    start_time = time.time()
+    collected_pcm = []
+    received_any = False
+    
+    # 1. Trigger C++ generation (fire-and-forget)
+    def _trigger():
         try:
-            print("[Bridge] TTS: Awaiting audio from pipe...")
-            while True:
-                # 🔧 TTS Timeout Logic:
-                # 1. 2s timeout for silence (new data)
-                # 2. 25s hard stop to beat OpenClaw fallback
-                
-                elapsed = time.time() - start_time
-                if elapsed > 25:
-                    print(f"[Bridge] TTS: Hard stop reached ({elapsed:.1f}s). Returning partial.")
-                    break
-                    
-                try:
-                    # Wait for data from TCP queue with a 2s silence timeout
-                    chunk = await asyncio.wait_for(audio_queue.get(), timeout=2.0)
-                except asyncio.TimeoutError:
-                    print("[Bridge] TTS: Silence detected (2s). Closing stream.")
-                    break
+            requests.post(
+                f"{CPP_SERVER_URL}/v1/tts/inject_text",
+                json={"text": request.input},
+                timeout=30
+            )
+        except Exception as e:
+            print(f"[Bridge] C++ Trigger error: {e}")
 
+    asyncio.create_task(asyncio.to_thread(_trigger))
+    
+    try:
+        print("[Bridge] TTS: Awaiting audio from pipe...")
+        while True:
+            elapsed = time.time() - start_time
+            if elapsed > 25:
+                print(f"[Bridge] TTS: Hard stop reached ({elapsed:.1f}s).")
+                break
+                
+            try:
+                # Initial wait: up to 25s for first byte. 
+                # After data starts: 2s silence timeout.
+                current_timeout = 2.0 if received_any else (25.0 - elapsed)
+                chunk = await asyncio.wait_for(audio_queue.get(), timeout=max(0.1, current_timeout))
+                
                 if chunk is None:
                     print("[Bridge] TTS: Stream finished (EOT).")
                     break
                 
-                # Yield raw PCM bytes (24kHz Mono 16-bit)
-                yield chunk
-        finally:
-            decode_in_progress = False
-            print("[Bridge] TTS: Stream handler closed.")
+                received_any = True
+                collected_pcm.append(chunk)
+            except asyncio.TimeoutError:
+                if received_any:
+                    print("[Bridge] TTS: Silence detected (2s). Processing.")
+                else:
+                    print("[Bridge] TTS: Initial data timeout (25s).")
+                break
 
-    return StreamingResponse(tts_streamer(), media_type="audio/pcm")
+    finally:
+        decode_in_progress = False
+        print("[Bridge] TTS: Collection complete.")
+
+    if not collected_pcm:
+        return Response(content=b"", media_type="audio/wav")
+
+    # 2. Concatenate and Convert to playable WAV
+    full_pcm = b"".join(collected_pcm)
+    audio_np = np.frombuffer(full_pcm, dtype=np.int16)
+    
+    out_buf = io.BytesIO()
+    sf.write(out_buf, audio_np, 24000, format='WAV') # MiniCPM-o uses 24kHz
+    out_buf.seek(0)
+    
+    print(f"[Bridge] TTS: Returning WAV file ({len(full_pcm)} bytes).")
+    return Response(content=out_buf.read(), media_type="audio/wav")
 
 @app.post("/omni/decode")
 async def trigger_decode(request: Request):
     """Open Pipe v2: Trigger C++ decode and yield bytes directly from the TCP queue."""
     guild_id = request.headers.get("X-Guild-ID", "default")
     print(f"[Bridge] Open Pipe: Direct Stream starting for guild={guild_id}")
+    
+    # 🔧 Phase 2 FIX: Reset counter IMMEDIATELY for Turn 2 transition
+    prefill_counters[guild_id] = 1
     
     global audio_queue, decode_in_progress
     

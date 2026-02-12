@@ -43,6 +43,11 @@
 #include <cstdarg>
 #include <signal.h>
 
+#include <sys/socket.h>
+#include <arpa/inet.h>
+#include <unistd.h>
+#include <fcntl.h>
+
 #ifdef _WIN32
     #include <windows.h>
     #include <direct.h>
@@ -63,44 +68,6 @@
     #include <sys/wait.h>
     #include <unistd.h>
     #include <dirent.h>
-#include <sys/socket.h>
-#include <arpa/inet.h>
-#include <unistd.h>
-#include <fcntl.h>
-
-static int g_t2w_tcp_socket = -1;
-
-static void t2w_tcp_send_pcm(const void* data, uint32_t len) {
-    if (g_t2w_tcp_socket == -1) {
-        g_t2w_tcp_socket = socket(AF_INET, SOCK_STREAM, 0);
-        if (g_t2w_tcp_socket < 0) return;
-        struct sockaddr_in serv_addr;
-        serv_addr.sin_family = AF_INET;
-        serv_addr.sin_port = htons(18099);
-        inet_pton(AF_INET, "127.0.0.1", &serv_addr.sin_addr);
-        struct timeval tv;
-        tv.tv_sec = 1;
-        tv.tv_usec = 0;
-        setsockopt(g_t2w_tcp_socket, SOL_SOCKET, SO_SNDTIMEO, (const char*)&tv, sizeof(tv));
-        if (connect(g_t2w_tcp_socket, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
-            fprintf(stderr, "[CPP-TCP] Connection failed: %s\n", strerror(errno));
-            close(g_t2w_tcp_socket);
-            g_t2w_tcp_socket = -1;
-            return;
-        }
-        fprintf(stderr, "[CPP-TCP] Connected to Bridge on 18099\n");
-    }
-    if (send(g_t2w_tcp_socket, &len, 4, 0) < 0) {
-        fprintf(stderr, "[CPP-TCP] Send length failed: %s\n", strerror(errno));
-        close(g_t2w_tcp_socket); g_t2w_tcp_socket = -1; return;
-    }
-    if (len > 0 && data != nullptr) {
-        if (send(g_t2w_tcp_socket, data, len, 0) < 0) {
-            fprintf(stderr, "[CPP-TCP] Send data failed: %s\n", strerror(errno));
-            close(g_t2w_tcp_socket); g_t2w_tcp_socket = -1;
-        }
-    }
-}
 #endif
 
 // ============================================================
@@ -3473,6 +3440,104 @@ void print_with_timestamp(const char* format, ...)
     va_end(args);
 }
 
+// 🔧 Phase 2: Inbound PCM Server
+static std::thread g_inbound_thread;
+static std::atomic<bool> g_inbound_thread_running{false};
+
+void inbound_tcp_server_thread(struct omni_context * ctx_omni) {
+    int server_fd;
+    struct sockaddr_in address;
+    int opt = 1;
+    int addrlen = sizeof(address);
+    if ((server_fd = socket(AF_INET, SOCK_STREAM, 0)) == 0) return;
+    if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt))) return;
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = INADDR_ANY;
+    address.sin_port = htons(18100);
+    if (bind(server_fd, (struct sockaddr *)&address, sizeof(address)) < 0) return;
+    if (listen(server_fd, 3) < 0) return;
+    print_with_timestamp("[Inbound-TCP] Server listening on port 18100\n");
+    while (g_inbound_thread_running) {
+        struct timeval tv = {1, 0};
+        fd_set rfds; FD_ZERO(&rfds); FD_SET(server_fd, &rfds);
+        if (select(server_fd + 1, &rfds, NULL, NULL, &tv) <= 0) continue;
+        int new_socket;
+        if ((new_socket = accept(server_fd, (struct sockaddr *)&address, (socklen_t*)&addrlen)) < 0) continue;
+        print_with_timestamp("[Inbound-TCP] New connection accepted\n");
+        while (g_inbound_thread_running) {
+            uint32_t len, remote_index;
+            if (read(new_socket, &len, 4) <= 0) break;
+            if (read(new_socket, &remote_index, 4) <= 0) break;
+            if (len == 0) {
+                print_with_timestamp("[Inbound-TCP] Received EOT. Triggering decode...\n");
+                ctx_omni->need_speek = true;
+                ctx_omni->llm_thread_info->cv.notify_all();
+                continue;
+            }
+            std::vector<int16_t> pcm(len / 2);
+            size_t total_read = 0;
+            while (total_read < len) {
+                ssize_t n = read(new_socket, (char*)pcm.data() + total_read, len - total_read);
+                if (n <= 0) break;
+                total_read += n;
+            }
+            if (total_read < len) break;
+            std::vector<float> pcm_f32(pcm.size());
+            for (size_t i = 0; i < pcm.size(); ++i) pcm_f32[i] = (float)pcm[i] / 32768.0f;
+            const size_t CHUNK_SAMPLES = 1600;
+            if (pcm_f32.size() % CHUNK_SAMPLES != 0) pcm_f32.resize(((pcm_f32.size() / CHUNK_SAMPLES) + 1) * CHUNK_SAMPLES, 0.0f);
+            whisper_preprocessor::whisper_filters filters = audition_get_mel_filters(ctx_omni->ctx_audio);
+            std::vector<whisper_preprocessor::whisper_mel> mel_spec_chunks;
+            if (whisper_preprocessor::preprocess_audio(pcm_f32.data(), pcm_f32.size(), filters, mel_spec_chunks) && !mel_spec_chunks.empty()) {
+                audition_audio_f32 * mel_f32 = audition_audio_f32_init();
+                mel_f32->nx = mel_spec_chunks[0].n_len; mel_f32->ny = mel_spec_chunks[0].n_mel; mel_f32->buf = std::move(mel_spec_chunks[0].data);
+                int n_embd = audition_n_mmproj_embd(ctx_omni->ctx_audio);
+                int n_tokens = audition_n_output_tokens(ctx_omni->ctx_audio, mel_f32);
+                std::vector<float> output_buffer(n_embd * n_tokens);
+                if (audition_audio_encode(ctx_omni->ctx_audio, ctx_omni->params->cpuparams.n_threads, mel_f32, output_buffer.data())) {
+                    omni_embeds * embeds = new struct omni_embeds();
+                    embeds->index = (int)remote_index;
+                    embeds->audio_embed.assign(output_buffer.begin(), output_buffer.end());
+                    std::unique_lock<std::mutex> lock(ctx_omni->llm_thread_info->mtx);
+                    ctx_omni->llm_thread_info->queue.push(embeds);
+                    ctx_omni->llm_thread_info->cv.notify_all();
+                }
+                audition_audio_f32_free(mel_f32);
+            }
+        }
+        close(new_socket);
+        print_with_timestamp("[Inbound-TCP] Connection closed\n");
+    }
+    close(server_fd);
+}
+
+// 🔧 Phase 1: Outbound PCM Pipe
+static int g_t2w_tcp_socket = -1;
+static void t2w_tcp_send_pcm(const void* data, uint32_t len) {
+    if (g_t2w_tcp_socket == -1) {
+        g_t2w_tcp_socket = socket(AF_INET, SOCK_STREAM, 0);
+        if (g_t2w_tcp_socket < 0) return;
+        struct sockaddr_in serv_addr;
+        serv_addr.sin_family = AF_INET;
+        serv_addr.sin_port = htons(18099);
+        inet_pton(AF_INET, "127.0.0.1", &serv_addr.sin_addr);
+        struct timeval tv = {1, 0};
+        setsockopt(g_t2w_tcp_socket, SOL_SOCKET, SO_SNDTIMEO, (const char*)&tv, sizeof(tv));
+        if (connect(g_t2w_tcp_socket, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
+            close(g_t2w_tcp_socket); g_t2w_tcp_socket = -1; return;
+        }
+        fprintf(stderr, "[CPP-TCP] Connected to Bridge on 18099\n");
+    }
+    if (send(g_t2w_tcp_socket, &len, 4, 0) < 0) {
+        close(g_t2w_tcp_socket); g_t2w_tcp_socket = -1; return;
+    }
+    if (len > 0 && data != nullptr) {
+        if (send(g_t2w_tcp_socket, data, len, 0) < 0) {
+            close(g_t2w_tcp_socket); g_t2w_tcp_socket = -1;
+        }
+    }
+}
+
 static struct llama_model * llama_init(common_params * params, std::string model_path) {
     llama_backend_init();
     llama_numa_init(params->numa);
@@ -3556,24 +3621,23 @@ struct omni_context * omni_init(struct common_params * params, int media_type, b
     if (duplex_mode) {
         // 🔧 [与 Python 对齐] Audio 双工模式：嵌入参考音频
         // 双工模式不需要 <|im_start|>user\n，用 <unit> 标记用户输入
-        ctx_omni->audio_voice_clone_prompt = "<|im_start|>system\nStreaming Duplex Conversation! You are a helpful assistant.\n<|audio_start|>";
+        ctx_omni->audio_voice_clone_prompt = "<|im_start|>system\nStreaming Duplex Conversation! You are a helpful assistant. PLEASE ALWAYS RESPOND IN ENGLISH.\n<|audio_start|>";
         ctx_omni->audio_assistant_prompt = "<|audio_end|><|im_end|>\n";
         
         // 🔧 [修复] Omni 双工模式：也需要嵌入参考音频，格式与 Audio 双工相同
-        ctx_omni->omni_voice_clone_prompt = "<|im_start|>system\nStreaming Duplex Conversation! You are a helpful assistant.\n<|audio_start|>";
+        ctx_omni->omni_voice_clone_prompt = "<|im_start|>system\nStreaming Duplex Conversation! You are a helpful assistant. PLEASE ALWAYS RESPOND IN ENGLISH.\n<|audio_start|>";
         ctx_omni->omni_assistant_prompt = "<|audio_end|><|im_end|>\n";
     } else {
         // 🔧 [与 Python 对齐] 非双工模式 Audio 格式 (audio_assistant 模式)
         // 格式: <|im_start|>system\n...<|im_end|>\n<|im_start|>user\n
         // 🔧 [整合] 在 sys prompt 末尾直接添加 <|im_start|>user\n，不再在 stream_prefill 里动态添加
         // 这样更稳妥，不依赖 Python 端的 counter 重置
+        ctx_omni->audio_voice_clone_prompt = "<|im_start|>system\nPlease mimic the tone of the audio sample and generate new content. PLEASE ALWAYS RESPOND IN ENGLISH.\n<|audio_start|>";
+        ctx_omni->audio_assistant_prompt = "<|audio_end|>Your task is to be an assistant using this voice mode. Please respond to user questions seriously and with high quality. Please chat with users in a highly natural way. ALWAYS RESPOND IN ENGLISH. You are an AI assistant developed by OpenClaw.<|im_end|>\n<|im_start|>user\n";
         
-        // Use English by default
-        ctx_omni->audio_voice_clone_prompt = "<|im_start|>system\nPlease mimic the tone of the audio sample and generate new content.\n<|audio_start|>";
-        ctx_omni->audio_assistant_prompt = "<|audio_end|>Your task is to be an assistant using this voice mode. Please respond to user questions seriously and with high quality. Please chat with users in a highly natural way. You are an AI assistant developed by OpenClaw.<|im_end|>\n<|im_start|>user\n";
-        
-        ctx_omni->omni_voice_clone_prompt = "<|im_start|>system\nPlease mimic the tone of the audio sample and generate new content.\n<|audio_start|>";
-        ctx_omni->omni_assistant_prompt = "<|audio_end|>Your task is to be an assistant using this voice mode. Please respond to user questions seriously and with high quality. Please chat with users in a highly natural way.<|im_end|>\n<|im_start|>user\n";
+        // Omni 模式（非双工）：与 Audio 模式类似，末尾也添加 <|im_start|>user\n
+        ctx_omni->omni_voice_clone_prompt = "<|im_start|>system\nPlease mimic the tone of the audio sample and generate new content. PLEASE ALWAYS RESPOND IN ENGLISH.\n<|audio_start|>";
+        ctx_omni->omni_assistant_prompt = "<|audio_end|>Your task is to be an assistant using this voice mode. Please respond to user questions seriously and with high quality. Please chat with users in a highly natural way. ALWAYS RESPOND IN ENGLISH.<|im_end|>\n<|im_start|>user\n";
     }
 
     llama_model * model = nullptr;
@@ -4024,6 +4088,12 @@ struct omni_context * omni_init(struct common_params * params, int media_type, b
     // ANE/CoreML warmup: pre-load models into NPU to avoid first-inference latency
     omni_warmup_ane(ctx_omni);
 
+    // 🔧 [Phase 2] Start Inbound PCM Server
+    if (!g_inbound_thread_running) {
+        g_inbound_thread_running = true;
+        g_inbound_thread = std::thread(inbound_tcp_server_thread, ctx_omni);
+    }
+
     print_with_timestamp("=== omni_init success: ctx_llama = %p\n", (void*)ctx_omni->ctx_llama);
     return ctx_omni;
 }
@@ -4216,12 +4286,12 @@ void omni_set_language(struct omni_context * ctx_omni, const std::string & lang)
             ctx_omni->omni_voice_clone_prompt = "<|im_start|>system\nClone the voice in the provided audio prompt.\n<|audio_start|>";
             ctx_omni->omni_assistant_prompt = "<|audio_end|>Please assist users while maintaining this voice style. Please answer the user's questions seriously and in a high quality. Please chat with the user in a highly human-like and oral style.<|im_end|>\n<|im_start|>user\n";
         } else {
-            // English prompt (default, aligned with Python modeling_minicpmo.py)
-            ctx_omni->audio_voice_clone_prompt = "<|im_start|>system\nPlease mimic the tone of the audio sample and generate new content.\n<|audio_start|>";
-            ctx_omni->audio_assistant_prompt = "<|audio_end|>Your task is to be an assistant using this voice mode. Please respond to user questions seriously and with high quality. Please chat with users in a highly natural way. You are an AI assistant developed by OpenClaw.<|im_end|>\n<|im_start|>user\n";
+            // 中文 prompt（默认，来自 Python modeling_minicpmo.py）
+            ctx_omni->audio_voice_clone_prompt = "<|im_start|>system\n模仿音频样本的音色并生成新的内容。\n<|audio_start|>";
+            ctx_omni->audio_assistant_prompt = "<|audio_end|>你的任务是用这种声音模式来当一个助手。请认真、高质量地回复用户的问题。请用高自然度的方式和用户聊天。你是由面壁智能开发的人工智能助手：面壁小钢炮。<|im_end|>\n<|im_start|>user\n";
             
-            ctx_omni->omni_voice_clone_prompt = "<|im_start|>system\nPlease mimic the tone of the audio sample and generate new content.\n<|audio_start|>";
-            ctx_omni->omni_assistant_prompt = "<|audio_end|>Your task is to be an assistant using this voice mode. Please respond to user questions seriously and with high quality. Please chat with users in a highly natural way.<|im_end|>\n<|im_start|>user\n";
+            ctx_omni->omni_voice_clone_prompt = "<|im_start|>system\n模仿音频样本的音色并生成新的内容。\n<|audio_start|>";
+            ctx_omni->omni_assistant_prompt = "<|audio_end|>你的任务是用这种声音模式来当一个助手。请认真、高质量地回复用户的问题。请用高自然度的方式和用户聊天。<|im_end|>\n<|im_start|>user\n";
         }
     }
     
@@ -4384,31 +4454,29 @@ void llm_thread_func(omni_context* ctx_omni, common_params* params){
                     // 音频部分
                     if (has_audio) {
                         if (!ctx_omni->duplex_mode) {
-                            // 单工格式：只有第一个 chunk 才添加 <|audio_start|>
+                            // 🔧 [Turn-Aware Fix] Only start audio block on first chunk
                             if (embeds->index == 1) {
-                                print_with_timestamp("Omni模式: Starting new audio block (index=1)\n");
                                 eval_string(ctx_omni, params, "<|audio_start|>", params->n_batch, &ctx_omni->n_past, false);
                                 ctx_omni->in_audio_block = true;
                             }
                         }
                         prefill_with_emb(ctx_omni, params, embeds->audio_embed.data(), n_audio_tokens,
                                         params->n_batch, &ctx_omni->n_past);
-                        // 注意：<|audio_end|> 现在由 stream_decode 在 turn 结束时添加
+                        // <|audio_end|> will be added by stream_decode or Turn End logic
                     }
                 }
                 // ========== 子分支2：处理只有音频嵌入的数据（纯音频模式） ==========
                 else {
                     int n_audio_tokens = embeds->audio_embed.size() / hidden_size;
-                    print_with_timestamp("用户语音: %d audio tokens\n", n_audio_tokens);
+                    print_with_timestamp("用户语音: %d audio tokens, index=%d\n", n_audio_tokens, embeds->index);
                     
                     // 🔧 [根据模式选择格式]
                     if (ctx_omni->duplex_mode) {
                         // 双工格式：<unit> + audio_embedding（无 audio_start/end）
                         eval_string(ctx_omni, params, "<unit>", params->n_batch, &ctx_omni->n_past, false);
                     } else {
-                        // 单工格式：只有第一个 chunk 才添加 <|audio_start|>
+                        // 🔧 [Turn-Aware Fix] Only start audio block on first chunk
                         if (embeds->index == 1) {
-                            print_with_timestamp("用户语音: Starting new audio block (index=1)\n");
                             eval_string(ctx_omni, params, "<|audio_start|>", params->n_batch, &ctx_omni->n_past, false);
                             ctx_omni->in_audio_block = true;
                         }
@@ -4418,7 +4486,7 @@ void llm_thread_func(omni_context* ctx_omni, common_params* params){
                     prefill_with_emb(ctx_omni, params, embeds->audio_embed.data(), n_audio_tokens,
                                     params->n_batch, &ctx_omni->n_past);
                     
-                    // <|audio_end|> 现在由 stream_decode 在 turn 结束时添加
+                    // <|audio_end|> will be added by stream_decode or Turn End logic
                 }
                 
                 // 🔧 [#39 滑动窗口] 注册 unit 结束
@@ -8261,7 +8329,6 @@ void t2w_thread_func_python(struct omni_context * ctx_omni, common_params *param
             
             if (is_last_window) {
                 if (is_final) {
-                    t2w_tcp_send_pcm(nullptr, 0); // 🔧 TCP EOT
                     // 写入结束标记
                     std::string done_flag_path = tts_wav_output_dir + "/generation_done.flag";
                     FILE* flag_file = fopen(done_flag_path.c_str(), "w");
@@ -8535,7 +8602,6 @@ void t2w_thread_func_cpp(struct omni_context * ctx_omni, common_params *params) 
                         x = std::max(-1.0f, std::min(1.0f, x));
                         pcm[i] = (int16_t)(x * 32767.0f);
                     }
-                    t2w_tcp_send_pcm(pcm.data(), (uint32_t)(pcm.size() * sizeof(int16_t))); // 🔧 TCP Pipe
                     
                     uint32_t data_bytes = (uint32_t)(pcm.size() * sizeof(int16_t));
                     uint32_t riff_size = 36u + data_bytes;
@@ -8680,6 +8746,14 @@ void t2w_thread_func(struct omni_context * ctx_omni, common_params *params) {
 
 bool stream_prefill(struct omni_context * ctx_omni, std::string aud_fname, std::string img_fname, int index, int max_slice_nums) {
     
+    // 🔧 [Phase 2] Auto-initialize system prompt if Turn 2+ starts without it
+    if (index >= 1 && !ctx_omni->system_prompt_initialized) {
+        print_with_timestamp("stream_prefill: auto-initializing system prompt for index=%d\n", index);
+        if (!stream_prefill(ctx_omni, "", "", 0, 0)) {
+            return false;
+        }
+    }
+
     // 只有在新一轮开始时 (index == 0) 才需要等待上一轮 TTS 完成
     // 同一轮内的后续 prefill (index >= 1) 不需要等待
     if (ctx_omni->use_tts && index == 0 && ctx_omni->warmup_done.load() && !ctx_omni->duplex_mode) {
@@ -8805,7 +8879,7 @@ bool stream_prefill(struct omni_context * ctx_omni, std::string aud_fname, std::
             
             // 确定 ref_audio 路径：优先使用配置的路径，否则使用默认路径
             std::string system_ref_audio = ctx_omni->ref_audio_path.empty() 
-                ? "assets/voices/jarvis.wav" 
+                ? "../assets/voices/jarvis.wav" 
                 : ctx_omni->ref_audio_path;
             print_with_timestamp("system prompt ref_audio: %s\n", system_ref_audio.c_str());
             
@@ -9661,20 +9735,12 @@ bool omni_inject_text(struct omni_context * ctx_omni, std::string text) {
         }
     }
 
-    // 2. Format and Evaluate the user text prompt
-    // 🔧 [修复] 检查是否有未结束的音频块
-    std::string prompt = "";
-    if (ctx_omni->in_audio_block) {
-        prompt += "<|audio_end|>";
-        ctx_omni->in_audio_block = false;
-    }
-    prompt += "<|im_start|>user\n" + text;
-    
+    // 2. Format the user text prompt
+    std::string prompt = "<|im_start|>user\n" + text + "<|im_end|>\n<|im_start|>assistant\n";
+
+    // 3. Evaluate the prompt text
     print_with_timestamp("omni_inject_text: injecting text: %s\n", text.c_str());
     eval_string(ctx_omni, ctx_omni->params, prompt.c_str(), ctx_omni->params->n_batch, &ctx_omni->n_past, false);
 
-    // 3. Trigger generation
-    return stream_decode(ctx_omni, "", ctx_omni->simplex_round_idx);
+    return true;
 }
-
-// restored by patch script

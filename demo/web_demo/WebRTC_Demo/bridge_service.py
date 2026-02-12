@@ -29,6 +29,36 @@ current_voice_path = None
 audio_queue = asyncio.Queue()
 decode_in_progress = False
 
+# 🔧 Phase 2: Inbound TCP State
+inbound_reader = None
+inbound_writer = None
+
+async def get_inbound_connection():
+    global inbound_reader, inbound_writer
+    if inbound_writer is None:
+        try:
+            print("[Bridge] Connecting to C++ Inbound TCP on 18100...")
+            inbound_reader, inbound_writer = await asyncio.open_connection('127.0.0.1', 18100)
+            print("[Bridge] Connected to C++ Inbound TCP.")
+        except Exception as e:
+            print(f"[Bridge] Inbound TCP connection failed: {e}")
+            inbound_writer = None
+    return inbound_writer
+
+async def send_inbound_pcm(data: bytes, index: int):
+    writer = await get_inbound_connection()
+    if writer:
+        try:
+            import struct
+            # Protocol: [4-byte length][4-byte index][Data]
+            writer.write(struct.pack('<II', len(data), index))
+            writer.write(data)
+            await writer.drain()
+        except Exception as e:
+            print(f"[Bridge] Send inbound PCM failed: {e}")
+            global inbound_writer
+            inbound_writer = None # Reset for reconnect
+
 # Ensure dirs exist
 os.makedirs(VOICE_DIR, exist_ok=True)
 
@@ -168,6 +198,7 @@ async def audio_speech(request: OpenAITTSRequest):
     async def tts_streamer():
         global decode_in_progress
         decode_in_progress = True
+        start_time = time.time()
         
         # 1. Trigger C++ generation (fire-and-forget)
         def _trigger():
@@ -185,7 +216,22 @@ async def audio_speech(request: OpenAITTSRequest):
         try:
             print("[Bridge] TTS: Awaiting audio from pipe...")
             while True:
-                chunk = await audio_queue.get()
+                # 🔧 TTS Timeout Logic:
+                # 1. 2s timeout for silence (new data)
+                # 2. 25s hard stop to beat OpenClaw fallback
+                
+                elapsed = time.time() - start_time
+                if elapsed > 25:
+                    print(f"[Bridge] TTS: Hard stop reached ({elapsed:.1f}s). Returning partial.")
+                    break
+                    
+                try:
+                    # Wait for data from TCP queue with a 2s silence timeout
+                    chunk = await asyncio.wait_for(audio_queue.get(), timeout=2.0)
+                except asyncio.TimeoutError:
+                    print("[Bridge] TTS: Silence detected (2s). Closing stream.")
+                    break
+
                 if chunk is None:
                     print("[Bridge] TTS: Stream finished (EOT).")
                     break
@@ -217,7 +263,7 @@ async def trigger_decode(request: Request):
         # 1. Start C++ decode (fire and forget)
         def _trigger():
             try:
-                # Get current round for logging/sync if needed
+                # 🔧 Phase 2: Still use HTTP trigger for control flow
                 requests.post(f"{CPP_SERVER_URL}/v1/stream/decode", json={}, timeout=10)
             except requests.exceptions.ReadTimeout:
                 pass
@@ -243,15 +289,15 @@ async def trigger_decode(request: Request):
                 
         finally:
             decode_in_progress = False
-            # 🔧 Reset counter for next turn to ensure <|audio_start|> is added
+            # 🔧 [TURN 2 FIX] Reset counter for next turn to ensure C++ adds <|audio_start|>
             prefill_counters[guild_id] = 1
-            print(f"[Bridge] Open Pipe: Stream closed for guild={guild_id}. Resetting counter.")
+            print(f"[Bridge] Open Pipe: Stream closed for guild={guild_id}. Resetting counter to 1.")
 
     return StreamingResponse(audio_streamer(), media_type="audio/pcm")
 
 @app.post("/omni/streaming_prefill")
 async def streaming_prefill(request: Request):
-    """Receive raw PCM chunks and forward to C++ server."""
+    """Receive raw PCM chunks and forward to C++ server via TCP."""
     guild_id = request.headers.get("X-Guild-ID", "default")
     pcm_data = await request.body()
     
@@ -267,26 +313,16 @@ async def streaming_prefill(request: Request):
         # Resample to 16000Hz (C++ server requirement)
         audio_16k = librosa.resample(audio_np, orig_sr=48000, target_sr=16000)
         
-        os.makedirs(TEMP_PREFILL_DIR, exist_ok=True)
+        # Convert back to s16le bytes for TCP transmission
+        pcm_16k = (audio_16k * 32767.0).astype(np.int16).tobytes()
+        
+        # 🔧 Phase 2: Send over TCP instead of saving file + HTTP
         cnt = prefill_counters.get(guild_id, 1)
+        await send_inbound_pcm(pcm_16k, cnt)
         
-        temp_path = os.path.abspath(os.path.join(TEMP_PREFILL_DIR, f"prefill_{guild_id}_{cnt}.wav"))
-        sf.write(temp_path, audio_16k, 16000, format='WAV', subtype='PCM_16')
-        
-        cpp_req = {
-            "audio_path_prefix": temp_path,
-            "img_path_prefix": "",
-            "cnt": cnt
-        }
-        
-        print(f"[Bridge] Prefill guild={guild_id} cnt={cnt}")
-        resp = requests.post(f"{CPP_SERVER_URL}/v1/stream/prefill", json=cpp_req, timeout=5)
-        
-        if resp.status_code == 200:
-            prefill_counters[guild_id] = cnt + 1
-            return {"status": "ok", "cnt": cnt}
-        else:
-            return {"status": "error", "message": resp.text}
+        # Keep internal turn counter for logging
+        prefill_counters[guild_id] = cnt + 1
+        return {"status": "ok", "cnt": cnt}
             
     except Exception as e:
         print(f"[Bridge] Prefill exception: {e}")

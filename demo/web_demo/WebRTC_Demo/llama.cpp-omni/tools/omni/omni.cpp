@@ -3644,11 +3644,12 @@ struct omni_context * omni_init(struct common_params * params, int media_type, b
         // 🔧 [修复] Omni 双工模式：也需要嵌入参考音频，格式与 Audio 双工相同
         ctx_omni->omni_voice_clone_prompt = "<|im_start|>system\nStreaming Duplex Conversation! You are a helpful assistant. Always respond in English.\n<|audio_start|>";
     } else {
-        // 🔧 [Hardcoded English] Strict English instruction for TTS stability
-        ctx_omni->audio_voice_clone_prompt = "<|im_start|>system\nYou are a helpful assistant. You must strictly answer in English. Do not speak Chinese.\n<|audio_start|>";
+        // 🔧 [Hardcoded English] Using Official README Magic Strings for Voice Cloning + English enforcement
+        // Prefix: "Clone the voice..." triggers the cloning module better than custom prompts
+        ctx_omni->audio_voice_clone_prompt = "<|im_start|>system\nClone the voice in the provided audio prompt.\n<|audio_start|>";
         
         // Omni 模式（非双工）：与 Audio 模式类似，末尾也添加 <|im_start|>user\n
-        ctx_omni->omni_voice_clone_prompt = "<|im_start|>system\nYou are a helpful assistant. You must strictly answer in English. Do not speak Chinese.\n<|audio_start|>";
+        ctx_omni->omni_voice_clone_prompt = "<|im_start|>system\nClone the voice in the provided audio prompt.\n<|audio_start|>";
     }
 
     if (!system_prompt_suffix.empty()) {
@@ -3659,8 +3660,9 @@ struct omni_context * omni_init(struct common_params * params, int media_type, b
         ctx_omni->audio_assistant_prompt = "<|audio_end|><|im_end|>\n";
         ctx_omni->omni_assistant_prompt = "<|audio_end|><|im_end|>\n";
     } else {
-        ctx_omni->audio_assistant_prompt = "<|audio_end|>Your task is to act as an assistant using this voice. Please answer user questions seriously and with high quality. Always speak in English, regardless of the input language.<|im_end|>\n<|im_start|>user\n";
-        ctx_omni->omni_assistant_prompt = "<|audio_end|>Your task is to act as an assistant using this voice. Please answer user questions seriously and with high quality. Always speak in English, regardless of the input language.<|im_end|>\n<|im_start|>user\n";
+        // Suffix: Official instructions + "Always speak in English"
+        ctx_omni->audio_assistant_prompt = "<|audio_end|>Your task is to be a helpful assistant using this voice pattern. Please answer the user's questions seriously and in a high quality. Please chat with the user in a high naturalness style. Always speak in English.<|im_end|>\n<|im_start|>user\n";
+        ctx_omni->omni_assistant_prompt = "<|audio_end|>Your task is to be a helpful assistant using this voice pattern. Please answer the user's questions seriously and in a high quality. Please chat with the user in a high naturalness style. Always speak in English.<|im_end|>\n<|im_start|>user\n";
     }
 
     llama_model * model = nullptr;
@@ -4305,12 +4307,16 @@ void omni_set_language(struct omni_context * ctx_omni, const std::string & lang)
         ctx_omni->omni_voice_clone_prompt = "<|im_start|>system\nStreaming Duplex Conversation! You are a helpful assistant. Always respond in English.\n<|audio_start|>";
         ctx_omni->omni_assistant_prompt = "<|audio_end|><|im_end|>\n";
     } else {
-        // 🔧 [Hardcoded English] Strict English instruction for TTS stability
-        ctx_omni->audio_voice_clone_prompt = "<|im_start|>system\nYou are a helpful assistant. You must strictly answer in English. Do not speak Chinese.\n<|audio_start|>";
-        ctx_omni->audio_assistant_prompt = "<|audio_end|>Your task is to act as an assistant using this voice. Please answer user questions seriously and with high quality. Always speak in English, regardless of the input language.<|im_end|>\n<|im_start|>user\n";
+        // 🔧 [Hardcoded English] Using Official README Magic Strings for Voice Cloning + English enforcement
+        // Prefix: "Clone the voice..." triggers the cloning module better than custom prompts
+        ctx_omni->audio_voice_clone_prompt = "<|im_start|>system\nClone the voice in the provided audio prompt.\n<|audio_start|>";
         
-        ctx_omni->omni_voice_clone_prompt = "<|im_start|>system\nYou are a helpful assistant. You must strictly answer in English. Do not speak Chinese.\n<|audio_start|>";
-        ctx_omni->omni_assistant_prompt = "<|audio_end|>Your task is to act as an assistant using this voice. Please answer user questions seriously and with high quality. Always speak in English, regardless of the input language.<|im_end|>\n<|im_start|>user\n";
+        // Omni 模式（非双工）：与 Audio 模式类似，末尾也添加 <|im_start|>user\n
+        ctx_omni->omni_voice_clone_prompt = "<|im_start|>system\nClone the voice in the provided audio prompt.\n<|audio_start|>";
+        
+        // Suffix: Official instructions + "Always speak in English"
+        ctx_omni->audio_assistant_prompt = "<|audio_end|>Your task is to be a helpful assistant using this voice pattern. Please answer the user's questions seriously and in a high quality. Please chat with the user in a high naturalness style. Always speak in English, regardless of the input language.<|im_end|>\n<|im_start|>user\n";
+        ctx_omni->omni_assistant_prompt = "<|audio_end|>Your task is to be a helpful assistant using this voice pattern. Please answer the user's questions seriously and in a high quality. Please chat with the user in a high naturalness style. Always speak in English, regardless of the input language.<|im_end|>\n<|im_start|>user\n";
     }
     
     // 🔧 [关键] 重置 system_prompt_initialized，让下次 stream_prefill(index=0) 重新 prefill system prompt

@@ -94,6 +94,9 @@ class OpenAITTSRequest(BaseModel):
     input: str
     voice: str = "default"
     response_format: Optional[str] = "opus"
+    # 🔧 [Configurable] Per-request params
+    prompt: Optional[str] = None
+    temperature: Optional[float] = None
 
 async def handle_tcp_client(reader, writer):
     """Receive length-prefixed PCM bytes from Sidecar."""
@@ -204,10 +207,25 @@ async def audio_speech(request: OpenAITTSRequest):
     # 1. Trigger C++ generation
     def _trigger():
         try:
-            print("[Bridge] Sending /v1/tts/inject_text to C++...")
+            # 🔧 [Configurable] Update session config if overrides provided
+            if request.prompt or request.temperature is not None:
+                update_payload = {"media_type": 2} # default omni
+                if request.prompt:
+                    update_payload["system_prompt_prefix"] = request.prompt
+                if request.temperature is not None:
+                    update_payload["temperature"] = request.temperature
+                
+                print(f"[Bridge] Updating session config: {update_payload}")
+                requests.post(f"{CPP_SERVER_URL}/v1/stream/update_session_config", json=update_payload, timeout=10)
+
+            # 🔧 [TTS Mode] Wrap text to force reading behavior (native behavior)
+            # This prevents the model from "replying" to the text instead of reading it
+            final_text = f"Please read the following content. {request.input}"
+
+            print(f"[Bridge] Sending /v1/tts/inject_text to C++: {final_text[:50]}...")
             resp = requests.post(
                 f"{CPP_SERVER_URL}/v1/tts/inject_text",
-                json={"text": request.input},
+                json={"text": final_text},
                 timeout=30
             )
             print(f"[Bridge] C++ Inject Response: {resp.status_code}")

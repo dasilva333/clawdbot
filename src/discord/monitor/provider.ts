@@ -28,7 +28,7 @@ import { resolveDiscordUserAllowlist } from "../resolve-users.js";
 import { normalizeDiscordToken } from "../token.js";
 import { createAgentComponentButton, createAgentSelectMenu } from "./agent-components.js";
 import { createExecApprovalButton, DiscordExecApprovalHandler } from "./exec-approvals.js";
-import { registerGateway, unregisterGateway } from "./gateway-registry.js";
+import { registerClient, registerGateway, unregisterGateway } from "./gateway-registry.js";
 import {
   DiscordMessageListener,
   DiscordPresenceListener,
@@ -83,6 +83,7 @@ async function deployDiscordCommands(params: {
   const runWithRetry = createDiscordRetryRunner({ verbose: shouldLogVerbose() });
   try {
     await runWithRetry(() => params.client.handleDeployRequest(), "command deploy");
+    console.log("discord: commands deployed successfully");
   } catch (err) {
     const details = formatDiscordDeployErrorDetails(err);
     params.runtime.error?.(
@@ -131,7 +132,8 @@ function resolveDiscordGatewayIntents(
     GatewayIntents.MessageContent |
     GatewayIntents.DirectMessages |
     GatewayIntents.GuildMessageReactions |
-    GatewayIntents.DirectMessageReactions;
+    GatewayIntents.DirectMessageReactions |
+    GatewayIntents.GuildVoiceStates;
   if (intentsConfig?.presence) {
     intents |= GatewayIntents.GuildPresences;
   }
@@ -478,6 +480,10 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   const agentComponentsConfig = discordCfg.agentComponents ?? {};
   const agentComponentsEnabled = agentComponentsConfig.enabled ?? true;
 
+  console.log(
+    `[DEBUG] Discord nativeEnabled=${nativeEnabled} nativeSkillsEnabled=${nativeSkillsEnabled}`,
+  );
+
   const components: BaseMessageInteractiveComponent[] = [
     createDiscordCommandArgFallbackButton({
       cfg,
@@ -538,6 +544,8 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   );
 
   await deployDiscordCommands({ client, runtime, enabled: nativeEnabled });
+
+  registerClient(account.accountId, client);
 
   const logger = createSubsystemLogger("discord/monitor");
   const guildHistories = new Map<string, HistoryEntry[]>();

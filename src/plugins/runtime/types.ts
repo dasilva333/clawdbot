@@ -101,6 +101,7 @@ type ResolveDiscordUserAllowlist =
 type SendMessageDiscord = typeof import("../../discord/send.js").sendMessageDiscord;
 type SendPollDiscord = typeof import("../../discord/send.js").sendPollDiscord;
 type MonitorDiscordProvider = typeof import("../../discord/monitor.js").monitorDiscordProvider;
+type GetDiscordClient = typeof import("../../discord/monitor/gateway-registry.js").getClient;
 type ListSlackDirectoryGroupsLive =
   typeof import("../../slack/directory-live.js").listSlackDirectoryGroupsLive;
 type ListSlackDirectoryPeersLive =
@@ -284,6 +285,7 @@ export type PluginRuntime = {
       sendMessageDiscord: SendMessageDiscord;
       sendPollDiscord: SendPollDiscord;
       monitorDiscordProvider: MonitorDiscordProvider;
+      getClient: GetDiscordClient;
     };
     slack: {
       listDirectoryGroupsLive: ListSlackDirectoryGroupsLive;

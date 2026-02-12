@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+console.log("[DEBUG] Build verification log");
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { getReplyFromConfig } from "./auto-reply/reply.js";

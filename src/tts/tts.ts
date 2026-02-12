@@ -504,7 +504,7 @@ export function resolveTtsApiKey(
 export const TTS_PROVIDERS = ["openai", "elevenlabs", "edge"] as const;
 
 export function resolveTtsProviderOrder(primary: TtsProvider): TtsProvider[] {
-  return [primary, ...TTS_PROVIDERS.filter((provider) => provider !== primary)];
+  return ["openai", "elevenlabs", "edge"];
 }
 
 export function isTtsProviderConfigured(config: ResolvedTtsConfig, provider: TtsProvider): boolean {
@@ -829,10 +829,12 @@ export const OPENAI_TTS_MODELS = ["gpt-4o-mini-tts", "tts-1", "tts-1-hd"] as con
  * Note: Read at runtime (not module load) to support config.env loading.
  */
 function getOpenAITtsBaseUrl(): string {
-  return (process.env.OPENAI_TTS_BASE_URL?.trim() || "https://api.openai.com/v1").replace(
+  const url = (process.env.OPENAI_TTS_BASE_URL?.trim() || "https://api.openai.com/v1").replace(
     /\/+$/,
     "",
   );
+  console.log(`[TTS] Using OpenAI Base URL: ${url}`);
+  return url;
 }
 
 function isCustomOpenAIEndpoint(): boolean {
@@ -1094,8 +1096,14 @@ async function openaiTTS(params: {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
+  const baseUrl = getOpenAITtsBaseUrl();
+  const url = `${baseUrl}/audio/speech`;
+  console.log(
+    `[TTS] Requesting OpenAI TTS: URL=${url} model=${model} voice=${voice} format=${responseFormat} textLen=${text.length}`,
+  );
+
   try {
-    const response = await fetch(`${getOpenAITtsBaseUrl()}/audio/speech`, {
+    const response = await fetch(url, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,
@@ -1111,10 +1119,20 @@ async function openaiTTS(params: {
     });
 
     if (!response.ok) {
+      const errorText = await response.text().catch(() => "no error body");
+      console.error(
+        `[TTS] OpenAI TTS API error: ${response.status} ${response.statusText} body=${errorText}`,
+      );
       throw new Error(`OpenAI TTS API error (${response.status})`);
     }
 
+    console.log(
+      `[TTS] OpenAI TTS success: status=${response.status} contentType=${response.headers.get("content-type")}`,
+    );
     return Buffer.from(await response.arrayBuffer());
+  } catch (err) {
+    console.error(`[TTS] OpenAI TTS fetch failed: ${err}`);
+    throw err;
   } finally {
     clearTimeout(timeout);
   }
@@ -1182,11 +1200,23 @@ export async function textToSpeech(params: {
   const provider = overrideProvider ?? userProvider;
   const providers = resolveTtsProviderOrder(provider);
 
+  console.log(
+    `[TTS] Request: textLen=${params.text.length} userProvider=${userProvider} overrideProvider=${overrideProvider} order=${providers.join(",")}`,
+  );
+
   let lastError: string | undefined;
 
   for (const provider of providers) {
     const providerStart = Date.now();
+    console.log(`[TTS] Attempting provider: ${provider}`);
     try {
+      if (provider === "openai") {
+        const key = resolveTtsApiKey(config, provider);
+        console.log(`[TTS] OpenAI key present: ${Boolean(key)}`);
+        if (!key) {
+          console.warn("[TTS] Missing OpenAI key, skipping.");
+        }
+      }
       if (provider === "edge") {
         if (!config.edge.enabled) {
           lastError = "edge: disabled";
@@ -1431,6 +1461,9 @@ export async function maybeApplyTtsToPayload(params: {
   inboundAudio?: boolean;
   ttsAuto?: string;
 }): Promise<ReplyPayload> {
+  console.log(
+    `[TTS] Entered maybeApplyTtsToPayload: kind=${params.kind} textLen=${params.payload.text?.length ?? 0}`,
+  );
   const config = resolveTtsConfig(params.cfg);
   const prefsPath = resolveTtsPrefsPath(config);
   const autoMode = resolveTtsAutoMode({
@@ -1561,6 +1594,9 @@ export async function maybeApplyTtsToPayload(params: {
   };
 
   const latency = Date.now() - ttsStart;
+  console.log(
+    `[TTS] Result: success=${result.success} provider=${result.provider} latency=${latency}ms error=${result.error}`,
+  );
   logVerbose(`TTS: conversion failed after ${latency}ms (${result.error ?? "unknown"}).`);
   return nextPayload;
 }

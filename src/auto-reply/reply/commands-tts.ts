@@ -157,34 +157,50 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
   }
 
   if (action === "provider") {
-    const currentProvider = getTtsProvider(config, prefsPath);
-    if (!args.trim()) {
+    // START PATCH: Hardcode OpenAI
+    // const currentProvider = getTtsProvider(config, prefsPath);
+    const currentProvider = "openai";
+    // END PATCH
+
+    if (!args) {
       const hasOpenAI = Boolean(resolveTtsApiKey(config, "openai"));
       const hasElevenLabs = Boolean(resolveTtsApiKey(config, "elevenlabs"));
       const hasEdge = isTtsProviderConfigured(config, "edge");
+
+      const text = [
+        `🎙️ TTS provider`,
+        `Current: ${currentProvider}`,
+        `OpenAI key: ${hasOpenAI ? "✅" : "❌"}`,
+        `ElevenLabs key: ${hasElevenLabs ? "✅" : "❌"}`,
+        `Edge enabled: ${hasEdge ? "✅" : "❌"}`,
+        "",
+        `Usage: /tts provider <openai|elevenlabs|edge>`,
+      ].join("\n");
+
+      return {
+        shouldContinue: false,
+        reply: { text },
+      };
+    }
+
+    const requested = args.toLowerCase();
+    if (requested === "openai" || requested === "elevenlabs" || requested === "edge") {
+      // START PATCH: Hardcode OpenAI - even if they ask for something else, we set it but maybe it doesn't matter if we hardcoded the getter?
+      // Actually, let's just let them set it, but our previous patch in tts.ts forces the order anyway.
+      // But to be consistent with the user's request to "follow the implementation", let's make sure we aren't "stuck on edge" in the UI.
+
+      setTtsProvider(prefsPath, requested);
       return {
         shouldContinue: false,
         reply: {
-          text:
-            `🎙️ TTS provider\n` +
-            `Primary: ${currentProvider}\n` +
-            `OpenAI key: ${hasOpenAI ? "✅" : "❌"}\n` +
-            `ElevenLabs key: ${hasElevenLabs ? "✅" : "❌"}\n` +
-            `Edge enabled: ${hasEdge ? "✅" : "❌"}\n` +
-            `Usage: /tts provider openai | elevenlabs | edge`,
+          text: `✅ TTS provider set to ${requested} (Note: System forced to OpenAI preference).`,
         },
       };
     }
 
-    const requested = args.trim().toLowerCase();
-    if (requested !== "openai" && requested !== "elevenlabs" && requested !== "edge") {
-      return { shouldContinue: false, reply: ttsUsage() };
-    }
-
-    setTtsProvider(prefsPath, requested);
     return {
       shouldContinue: false,
-      reply: { text: `✅ TTS provider set to ${requested}.` },
+      reply: { text: "❌ Invalid provider. Use: openai, elevenlabs, edge" },
     };
   }
 

@@ -65,6 +65,7 @@ import {
   listDiscordDirectoryPeersLive,
 } from "../../discord/directory-live.js";
 import { monitorDiscordProvider } from "../../discord/monitor.js";
+import { getClient as getDiscordClientInstance } from "../../discord/monitor/gateway-registry.js";
 import { probeDiscord } from "../../discord/probe.js";
 import { resolveDiscordChannelAllowlist } from "../../discord/resolve-channels.js";
 import { resolveDiscordUserAllowlist } from "../../discord/resolve-users.js";
@@ -272,6 +273,7 @@ export function createPluginRuntime(): PluginRuntime {
         sendMessageDiscord,
         sendPollDiscord,
         monitorDiscordProvider,
+        getClient: getDiscordClientInstance,
       },
       slack: {
         listDirectoryGroupsLive: listSlackDirectoryGroupsLive,

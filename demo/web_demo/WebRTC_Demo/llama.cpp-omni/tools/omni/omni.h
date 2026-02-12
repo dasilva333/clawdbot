@@ -244,6 +244,9 @@ struct omni_context {
     // 系统 prompt 是否已初始化（防止 stream_prefill index=0 被重复调用导致 prompt 重复）
     bool system_prompt_initialized = false;
     
+    // 🔧 [语音通话修复] 记录是否正在处理音频块
+    bool in_audio_block = false;
+    
     class AudioInputManager * audio_input_manager = NULL;
     
     // models path and other configs
@@ -274,7 +277,7 @@ struct omni_context {
     std::string audio_assistant_prompt = "";
     
     // 语言设置 (用于 prompt 生成)
-    std::string language = "zh";
+    std::string language = "en";
 
     // text streaming queue for server
     std::mutex text_mtx;

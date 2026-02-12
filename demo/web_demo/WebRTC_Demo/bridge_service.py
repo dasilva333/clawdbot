@@ -217,7 +217,8 @@ async def trigger_decode(request: Request):
         # 1. Start C++ decode (fire and forget)
         def _trigger():
             try:
-                requests.post(f"{CPP_SERVER_URL}/v1/stream/decode", json={}, timeout=2)
+                # Get current round for logging/sync if needed
+                requests.post(f"{CPP_SERVER_URL}/v1/stream/decode", json={}, timeout=10)
             except requests.exceptions.ReadTimeout:
                 pass
             except Exception as e:
@@ -242,8 +243,9 @@ async def trigger_decode(request: Request):
                 
         finally:
             decode_in_progress = False
+            # 🔧 Reset counter for next turn to ensure <|audio_start|> is added
             prefill_counters[guild_id] = 1
-            print(f"[Bridge] Open Pipe: Stream closed for guild={guild_id}")
+            print(f"[Bridge] Open Pipe: Stream closed for guild={guild_id}. Resetting counter.")
 
     return StreamingResponse(audio_streamer(), media_type="audio/pcm")
 

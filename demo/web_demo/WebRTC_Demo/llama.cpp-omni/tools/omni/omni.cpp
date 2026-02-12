@@ -3567,12 +3567,13 @@ struct omni_context * omni_init(struct common_params * params, int media_type, b
         // 格式: <|im_start|>system\n...<|im_end|>\n<|im_start|>user\n
         // 🔧 [整合] 在 sys prompt 末尾直接添加 <|im_start|>user\n，不再在 stream_prefill 里动态添加
         // 这样更稳妥，不依赖 Python 端的 counter 重置
-        ctx_omni->audio_voice_clone_prompt = "<|im_start|>system\n模仿音频样本的音色并生成新的内容。\n<|audio_start|>";
-        ctx_omni->audio_assistant_prompt = "<|audio_end|>你的任务是用这种声音模式来当一个助手。请认真、高质量地回复用户的问题。请用高自然度的方式和用户聊天。你是由面壁智能开发的人工智能助手：面壁小钢炮。<|im_end|>\n<|im_start|>user\n";
         
-        // Omni 模式（非双工）：与 Audio 模式类似，末尾也添加 <|im_start|>user\n
-        ctx_omni->omni_voice_clone_prompt = "<|im_start|>system\n模仿音频样本的音色并生成新的内容。\n<|audio_start|>";
-        ctx_omni->omni_assistant_prompt = "<|audio_end|>你的任务是用这种声音模式来当一个助手。请认真、高质量地回复用户的问题。请用高自然度的方式和用户聊天。<|im_end|>\n<|im_start|>user\n";
+        // Use English by default
+        ctx_omni->audio_voice_clone_prompt = "<|im_start|>system\nPlease mimic the tone of the audio sample and generate new content.\n<|audio_start|>";
+        ctx_omni->audio_assistant_prompt = "<|audio_end|>Your task is to be an assistant using this voice mode. Please respond to user questions seriously and with high quality. Please chat with users in a highly natural way. You are an AI assistant developed by OpenClaw.<|im_end|>\n<|im_start|>user\n";
+        
+        ctx_omni->omni_voice_clone_prompt = "<|im_start|>system\nPlease mimic the tone of the audio sample and generate new content.\n<|audio_start|>";
+        ctx_omni->omni_assistant_prompt = "<|audio_end|>Your task is to be an assistant using this voice mode. Please respond to user questions seriously and with high quality. Please chat with users in a highly natural way.<|im_end|>\n<|im_start|>user\n";
     }
 
     llama_model * model = nullptr;
@@ -4215,12 +4216,12 @@ void omni_set_language(struct omni_context * ctx_omni, const std::string & lang)
             ctx_omni->omni_voice_clone_prompt = "<|im_start|>system\nClone the voice in the provided audio prompt.\n<|audio_start|>";
             ctx_omni->omni_assistant_prompt = "<|audio_end|>Please assist users while maintaining this voice style. Please answer the user's questions seriously and in a high quality. Please chat with the user in a highly human-like and oral style.<|im_end|>\n<|im_start|>user\n";
         } else {
-            // 中文 prompt（默认，来自 Python modeling_minicpmo.py）
-            ctx_omni->audio_voice_clone_prompt = "<|im_start|>system\n模仿音频样本的音色并生成新的内容。\n<|audio_start|>";
-            ctx_omni->audio_assistant_prompt = "<|audio_end|>你的任务是用这种声音模式来当一个助手。请认真、高质量地回复用户的问题。请用高自然度的方式和用户聊天。你是由面壁智能开发的人工智能助手：面壁小钢炮。<|im_end|>\n<|im_start|>user\n";
+            // English prompt (default, aligned with Python modeling_minicpmo.py)
+            ctx_omni->audio_voice_clone_prompt = "<|im_start|>system\nPlease mimic the tone of the audio sample and generate new content.\n<|audio_start|>";
+            ctx_omni->audio_assistant_prompt = "<|audio_end|>Your task is to be an assistant using this voice mode. Please respond to user questions seriously and with high quality. Please chat with users in a highly natural way. You are an AI assistant developed by OpenClaw.<|im_end|>\n<|im_start|>user\n";
             
-            ctx_omni->omni_voice_clone_prompt = "<|im_start|>system\n模仿音频样本的音色并生成新的内容。\n<|audio_start|>";
-            ctx_omni->omni_assistant_prompt = "<|audio_end|>你的任务是用这种声音模式来当一个助手。请认真、高质量地回复用户的问题。请用高自然度的方式和用户聊天。<|im_end|>\n<|im_start|>user\n";
+            ctx_omni->omni_voice_clone_prompt = "<|im_start|>system\nPlease mimic the tone of the audio sample and generate new content.\n<|audio_start|>";
+            ctx_omni->omni_assistant_prompt = "<|audio_end|>Your task is to be an assistant using this voice mode. Please respond to user questions seriously and with high quality. Please chat with users in a highly natural way.<|im_end|>\n<|im_start|>user\n";
         }
     }
     
@@ -4383,14 +4384,16 @@ void llm_thread_func(omni_context* ctx_omni, common_params* params){
                     // 音频部分
                     if (has_audio) {
                         if (!ctx_omni->duplex_mode) {
-                            // 单工格式：<|audio_start|> + audio + <|audio_end|>
-                            eval_string(ctx_omni, params, "<|audio_start|>", params->n_batch, &ctx_omni->n_past, false);
+                            // 单工格式：只有第一个 chunk 才添加 <|audio_start|>
+                            if (embeds->index == 1) {
+                                print_with_timestamp("Omni模式: Starting new audio block (index=1)\n");
+                                eval_string(ctx_omni, params, "<|audio_start|>", params->n_batch, &ctx_omni->n_past, false);
+                                ctx_omni->in_audio_block = true;
+                            }
                         }
                         prefill_with_emb(ctx_omni, params, embeds->audio_embed.data(), n_audio_tokens,
                                         params->n_batch, &ctx_omni->n_past);
-                        if (!ctx_omni->duplex_mode) {
-                            eval_string(ctx_omni, params, "<|audio_end|>", params->n_batch, &ctx_omni->n_past, false);
-                        }
+                        // 注意：<|audio_end|> 现在由 stream_decode 在 turn 结束时添加
                     }
                 }
                 // ========== 子分支2：处理只有音频嵌入的数据（纯音频模式） ==========
@@ -4403,18 +4406,19 @@ void llm_thread_func(omni_context* ctx_omni, common_params* params){
                         // 双工格式：<unit> + audio_embedding（无 audio_start/end）
                         eval_string(ctx_omni, params, "<unit>", params->n_batch, &ctx_omni->n_past, false);
                     } else {
-                        // 单工格式：<|audio_start|> + audio + <|audio_end|>
-                        eval_string(ctx_omni, params, "<|audio_start|>", params->n_batch, &ctx_omni->n_past, false);
+                        // 单工格式：只有第一个 chunk 才添加 <|audio_start|>
+                        if (embeds->index == 1) {
+                            print_with_timestamp("用户语音: Starting new audio block (index=1)\n");
+                            eval_string(ctx_omni, params, "<|audio_start|>", params->n_batch, &ctx_omni->n_past, false);
+                            ctx_omni->in_audio_block = true;
+                        }
                     }
                     
                     // Prefill 音频 embedding
                     prefill_with_emb(ctx_omni, params, embeds->audio_embed.data(), n_audio_tokens,
                                     params->n_batch, &ctx_omni->n_past);
                     
-                    // 单工格式需要 <|audio_end|>
-                    if (!ctx_omni->duplex_mode) {
-                        eval_string(ctx_omni, params, "<|audio_end|>", params->n_batch, &ctx_omni->n_past, false);
-                    }
+                    // <|audio_end|> 现在由 stream_decode 在 turn 结束时添加
                 }
                 
                 // 🔧 [#39 滑动窗口] 注册 unit 结束
@@ -8801,7 +8805,7 @@ bool stream_prefill(struct omni_context * ctx_omni, std::string aud_fname, std::
             
             // 确定 ref_audio 路径：优先使用配置的路径，否则使用默认路径
             std::string system_ref_audio = ctx_omni->ref_audio_path.empty() 
-                ? "tools/omni/assets/default_ref_audio/default_ref_audio.wav" 
+                ? "assets/voices/jarvis.wav" 
                 : ctx_omni->ref_audio_path;
             print_with_timestamp("system prompt ref_audio: %s\n", system_ref_audio.c_str());
             
@@ -9128,24 +9132,30 @@ bool stream_decode(struct omni_context * ctx_omni, std::string debug_dir, int ro
         // stream_prefill 已添加 <unit>[audio_embed]
         // 模型会输出 <|speak|>xxx<|chunk_eos|> 或 <|listen|><|chunk_eos|>
         print_with_timestamp("stream_decode: 双工模式，跳过 assistant prompt\n");
-    } else if (ctx_omni->use_tts) {
-        // 🔧 [非双工 TTS 模式] 需要包含 <|tts_bos|>，告诉模型开始生成 TTS 文本
-        // stream_prefill 已添加 <|audio_start|>[audio]<|audio_end|>，这里关闭用户消息并添加 assistant prompt
-        // 格式: <|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n<|tts_bos|>
-        std::string prompt = "<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n<|tts_bos|>";
-        print_with_timestamp("📍 [单工TTS] 添加 assistant prompt: \"%s\", n_past=%d\n", 
+    } else {
+        // 🔧 [非双工模式]
+        std::string prompt = "";
+        
+        // 1. 如果有未结束的音频块，先关闭它
+        if (ctx_omni->in_audio_block) {
+            prompt += "<|audio_end|>";
+            ctx_omni->in_audio_block = false;
+        }
+        
+        // 2. 关闭用户消息并添加 assistant prompt
+        prompt += "<|im_end|>\n<|im_start|>assistant\n";
+        
+        // 3. 如果启用 TTS，添加 think 标记和 tts_bos
+        if (ctx_omni->use_tts) {
+            prompt += "<think>\n\n</think>\n\n<|tts_bos|>";
+        }
+        
+        print_with_timestamp("📍 [单工] 添加 assistant prompt: \"%s\", n_past=%d\n", 
                             prompt.c_str(), ctx_omni->n_past);
         {
             eval_string(ctx_omni, ctx_omni->params, prompt.c_str(), ctx_omni->params->n_batch, &ctx_omni->n_past, false);
         }
-        print_with_timestamp("📍 [单工TTS] assistant prompt 完成, n_past=%d\n", ctx_omni->n_past);
-    } else {
-        // 🔧 [非双工纯 LLM 模式] 只使用标准的 assistant prompt（无 TTS 标记，无 think 标记）
-        // 格式: <|im_end|>\n<|im_start|>assistant\n
-        std::string prompt = "<|im_end|>\n<|im_start|>assistant\n";
-        {
-            eval_string(ctx_omni, ctx_omni->params, prompt.c_str(), ctx_omni->params->n_batch, &ctx_omni->n_past, false);
-        }
+        print_with_timestamp("📍 [单工] assistant prompt 完成, n_past=%d\n", ctx_omni->n_past);
     }
     LOG_INF("<user>%s\n", ctx_omni->params->prompt.c_str());
     LOG_INF("<assistant>");
@@ -9652,8 +9662,14 @@ bool omni_inject_text(struct omni_context * ctx_omni, std::string text) {
     }
 
     // 2. Format and Evaluate the user text prompt
-    // stream_decode expects n_past to be after the user message (it adds <|im_end|>)
-    std::string prompt = "<|im_start|>user\n" + text;
+    // 🔧 [修复] 检查是否有未结束的音频块
+    std::string prompt = "";
+    if (ctx_omni->in_audio_block) {
+        prompt += "<|audio_end|>";
+        ctx_omni->in_audio_block = false;
+    }
+    prompt += "<|im_start|>user\n" + text;
+    
     print_with_timestamp("omni_inject_text: injecting text: %s\n", text.c_str());
     eval_string(ctx_omni, ctx_omni->params, prompt.c_str(), ctx_omni->params->n_batch, &ctx_omni->n_past, false);
 

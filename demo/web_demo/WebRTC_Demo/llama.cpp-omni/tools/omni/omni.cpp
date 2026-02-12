@@ -3633,23 +3633,20 @@ struct omni_context * omni_init(struct common_params * params, int media_type, b
     if (duplex_mode) {
         // 🔧 [与 Python 对齐] Audio 双工模式：嵌入参考音频
         // 双工模式不需要 <|im_start|>user\n，用 <unit> 标记用户输入
-        ctx_omni->audio_voice_clone_prompt = "<|im_start|>system\nStreaming Duplex Conversation! You are a helpful assistant.\n<|audio_start|>";
+        ctx_omni->audio_voice_clone_prompt = "<|im_start|>system\nStreaming Duplex Conversation! You are a helpful assistant. Always respond in English.\n<|audio_start|>";
         ctx_omni->audio_assistant_prompt = "<|audio_end|><|im_end|>\n";
         
         // 🔧 [修复] Omni 双工模式：也需要嵌入参考音频，格式与 Audio 双工相同
-        ctx_omni->omni_voice_clone_prompt = "<|im_start|>system\nStreaming Duplex Conversation! You are a helpful assistant.\n<|audio_start|>";
+        ctx_omni->omni_voice_clone_prompt = "<|im_start|>system\nStreaming Duplex Conversation! You are a helpful assistant. Always respond in English.\n<|audio_start|>";
         ctx_omni->omni_assistant_prompt = "<|audio_end|><|im_end|>\n";
     } else {
-        // 🔧 [与 Python 对齐] 非双工模式 Audio 格式 (audio_assistant 模式)
-        // 格式: <|im_start|>system\n...<|im_end|>\n<|im_start|>user\n
-        // 🔧 [整合] 在 sys prompt 末尾直接添加 <|im_start|>user\n，不再在 stream_prefill 里动态添加
-        // 这样更稳妥，不依赖 Python 端的 counter 重置
-        ctx_omni->audio_voice_clone_prompt = "<|im_start|>system\n模仿音频样本的音色并生成新的内容。\n<|audio_start|>";
-        ctx_omni->audio_assistant_prompt = "<|audio_end|>你的任务是用这种声音模式来当一个助手。请认真、高质量地回复用户的问题。请用高自然度的方式和用户聊天。你是由面壁智能开发的人工智能助手：面壁小钢炮。<|im_end|>\n<|im_start|>user\n";
+        // 🔧 [Hardcoded English] Strict English instruction for TTS stability
+        ctx_omni->audio_voice_clone_prompt = "<|im_start|>system\nYou are a helpful assistant. You must strictly answer in English. Do not speak Chinese.\n<|audio_start|>";
+        ctx_omni->audio_assistant_prompt = "<|audio_end|>Your task is to act as an assistant using this voice. Please answer user questions seriously and with high quality. Always speak in English, regardless of the input language.<|im_end|>\n<|im_start|>user\n";
         
         // Omni 模式（非双工）：与 Audio 模式类似，末尾也添加 <|im_start|>user\n
-        ctx_omni->omni_voice_clone_prompt = "<|im_start|>system\n模仿音频样本的音色并生成新的内容。\n<|audio_start|>";
-        ctx_omni->omni_assistant_prompt = "<|audio_end|>你的任务是用这种声音模式来当一个助手。请认真、高质量地回复用户的问题。请用高自然度的方式和用户聊天。<|im_end|>\n<|im_start|>user\n";
+        ctx_omni->omni_voice_clone_prompt = "<|im_start|>system\nYou are a helpful assistant. You must strictly answer in English. Do not speak Chinese.\n<|audio_start|>";
+        ctx_omni->omni_assistant_prompt = "<|audio_end|>Your task is to act as an assistant using this voice. Please answer user questions seriously and with high quality. Always speak in English, regardless of the input language.<|im_end|>\n<|im_start|>user\n";
     }
 
     llama_model * model = nullptr;
@@ -3730,7 +3727,7 @@ struct omni_context * omni_init(struct common_params * params, int media_type, b
         // 🔧 TTS流式采样参数 - 与 Python ras_sampling 对齐：
         // Python TTSSamplingParams 默认 temperature=0.8 (modeling_minicpmo.py line 75)
         common_params_sampling tts_sampling = params->sampling;
-        tts_sampling.temp = 0.8f;              // 🔧 [与 Python 对齐] TTSSamplingParams.temperature=0.8
+        tts_sampling.temp = 0.1f;              // 🔧 [Hardcoded] Lower temp for stable TTS (was 0.8)
         tts_sampling.top_p = 0.85f;  // 🔧 [与 Python 对齐] TTSSamplingParams.top_p=0.85             // 🔧 [与 Python streaming 对齐] top_p=0.8
         tts_sampling.top_k = 25;               // top_k = 25 (ras_sampling 参数)
         tts_sampling.penalty_repeat = 1.05f;   // repetition_penalty = 1.05
@@ -4278,27 +4275,17 @@ void omni_set_language(struct omni_context * ctx_omni, const std::string & lang)
     
     if (ctx_omni->duplex_mode) {
         // 双工模式：prompt 固定使用英文（与 Python 对齐）
-        ctx_omni->audio_voice_clone_prompt = "<|im_start|>system\nStreaming Duplex Conversation! You are a helpful assistant.\n<|audio_start|>";
+        ctx_omni->audio_voice_clone_prompt = "<|im_start|>system\nStreaming Duplex Conversation! You are a helpful assistant. Always respond in English.\n<|audio_start|>";
         ctx_omni->audio_assistant_prompt = "<|audio_end|><|im_end|>\n";
-        ctx_omni->omni_voice_clone_prompt = "<|im_start|>system\nStreaming Duplex Conversation! You are a helpful assistant.\n<|audio_start|>";
+        ctx_omni->omni_voice_clone_prompt = "<|im_start|>system\nStreaming Duplex Conversation! You are a helpful assistant. Always respond in English.\n<|audio_start|>";
         ctx_omni->omni_assistant_prompt = "<|audio_end|><|im_end|>\n";
     } else {
-        // 非双工模式（audio_assistant 模式）：根据语言设置 prompt
-        if (lang == "en") {
-            // 英文 prompt（来自 Python modeling_minicpmo.py）
-            ctx_omni->audio_voice_clone_prompt = "<|im_start|>system\nClone the voice in the provided audio prompt.\n<|audio_start|>";
-            ctx_omni->audio_assistant_prompt = "<|audio_end|>Please assist users while maintaining this voice style. Please answer the user's questions seriously and in a high quality. Please chat with the user in a highly human-like and oral style. You are a helpful assistant developed by ModelBest: MiniCPM-Omni.<|im_end|>\n<|im_start|>user\n";
-            
-            ctx_omni->omni_voice_clone_prompt = "<|im_start|>system\nClone the voice in the provided audio prompt.\n<|audio_start|>";
-            ctx_omni->omni_assistant_prompt = "<|audio_end|>Please assist users while maintaining this voice style. Please answer the user's questions seriously and in a high quality. Please chat with the user in a highly human-like and oral style.<|im_end|>\n<|im_start|>user\n";
-        } else {
-            // 中文 prompt（默认，来自 Python modeling_minicpmo.py）
-            ctx_omni->audio_voice_clone_prompt = "<|im_start|>system\n模仿音频样本的音色并生成新的内容。\n<|audio_start|>";
-            ctx_omni->audio_assistant_prompt = "<|audio_end|>你的任务是用这种声音模式来当一个助手。请认真、高质量地回复用户的问题。请用高自然度的方式和用户聊天。你是由面壁智能开发的人工智能助手：面壁小钢炮。<|im_end|>\n<|im_start|>user\n";
-            
-            ctx_omni->omni_voice_clone_prompt = "<|im_start|>system\n模仿音频样本的音色并生成新的内容。\n<|audio_start|>";
-            ctx_omni->omni_assistant_prompt = "<|audio_end|>你的任务是用这种声音模式来当一个助手。请认真、高质量地回复用户的问题。请用高自然度的方式和用户聊天。<|im_end|>\n<|im_start|>user\n";
-        }
+        // 🔧 [Hardcoded English] Strict English instruction for TTS stability
+        ctx_omni->audio_voice_clone_prompt = "<|im_start|>system\nYou are a helpful assistant. You must strictly answer in English. Do not speak Chinese.\n<|audio_start|>";
+        ctx_omni->audio_assistant_prompt = "<|audio_end|>Your task is to act as an assistant using this voice. Please answer user questions seriously and with high quality. Always speak in English, regardless of the input language.<|im_end|>\n<|im_start|>user\n";
+        
+        ctx_omni->omni_voice_clone_prompt = "<|im_start|>system\nYou are a helpful assistant. You must strictly answer in English. Do not speak Chinese.\n<|audio_start|>";
+        ctx_omni->omni_assistant_prompt = "<|audio_end|>Your task is to act as an assistant using this voice. Please answer user questions seriously and with high quality. Always speak in English, regardless of the input language.<|im_end|>\n<|im_start|>user\n";
     }
     
     // 🔧 [关键] 重置 system_prompt_initialized，让下次 stream_prefill(index=0) 重新 prefill system prompt

@@ -30,6 +30,9 @@ guild_audio_buffers = {} # 🔧 Buffer PCM chunks until decode
 current_voice_path = DEFAULT_REF_AUDIO
 audio_queue = asyncio.Queue()
 decode_in_progress = False
+voice_session_initialized = False
+voice_session_guild_id = None
+voice_session_lock = asyncio.Lock()
 
 os.makedirs(VOICE_DIR, exist_ok=True)
 
@@ -117,6 +120,30 @@ class InitSysPromptRequest(BaseModel):
     temperature: Optional[float] = None
     voice_audio: Optional[str] = None
     language: Optional[str] = "en"
+
+async def _ensure_voice_session(guild_id: str, temperature: float = 0.7) -> None:
+    """Initialize the C++ omni session once per guild, keep context for later turns."""
+    global voice_session_initialized, voice_session_guild_id
+
+    async with voice_session_lock:
+        needs_init = (not voice_session_initialized) or (voice_session_guild_id != guild_id)
+        if not needs_init:
+            return
+
+        if voice_session_guild_id and voice_session_guild_id != guild_id:
+            print(f"[Bridge] Guild switch: {voice_session_guild_id} -> {guild_id}; reinitializing session")
+        else:
+            print(f"[Bridge] Initializing voice session for guild={guild_id}")
+
+        result = await init_sys_prompt(InitSysPromptRequest(temperature=temperature))
+        if isinstance(result, dict):
+            if result.get("status") == "error":
+                raise HTTPException(status_code=500, detail=f"Session init failed: {result.get('message', 'unknown error')}")
+            if result.get("success") is False:
+                raise HTTPException(status_code=500, detail=f"Session init failed: {result}")
+
+        voice_session_initialized = True
+        voice_session_guild_id = guild_id
 
 def _get_voice_path(voice_id: str) -> Optional[str]:
     if not voice_id or voice_id == "default":
@@ -353,47 +380,57 @@ async def synthesize(req: SynthesizeRequest, stream: bool = False):
 
 @app.post("/omni/decode")
 async def trigger_decode(request: Request):
-    """Open Pipe v3.2: Full official turn wrapping."""
+    """Decode the buffered guild audio as one user turn and stream back raw PCM."""
     guild_id = request.headers.get("X-Guild-ID", "default")
     print(f"[Bridge] Turn Start: {guild_id}")
-    
-    # 1. Reset & Setup Persona (Clean Slate every turn)
-    try: requests.post(f"{CPP_SERVER_URL}/v1/stream/reset", json={}, timeout=5)
-    except: pass
-    await init_sys_prompt(InitSysPromptRequest(temperature=0.7))
+
+    # Keep one initialized session per guild so multi-turn context survives.
+    await _ensure_voice_session(guild_id, temperature=0.7)
 
     # 2. Flush queue
     global audio_queue, decode_in_progress
     while not audio_queue.empty(): audio_queue.get_nowait()
 
-    # 3. Inject User Turn with official tags
-    # <|im_start|>user\n<|audio_start|> (AUDIO) <|audio_end|><|im_end|>\n<|im_start|>assistant\n
+    # 3. Inject a user-audio turn.
+    # stream_decode() will append assistant generation prompt; do not open assistant here.
+    prefill_wait_sec = 0.1
     try:
-        # Use inject_text to send the opening tags
+        buffered_pcm = guild_audio_buffers.pop(guild_id, [])
+        if not buffered_pcm:
+            raise HTTPException(status_code=400, detail=f"No buffered audio for guild {guild_id}")
+
+        # Open user audio block.
         requests.post(f"{CPP_SERVER_URL}/v1/tts/inject_text", 
                       json={"text": "<|im_start|>user\n<|audio_start|>"}, timeout=5)
-        
-        # Send Audio Block
-        buffered_pcm = guild_audio_buffers.pop(guild_id, [])
-        if buffered_pcm:
-            full_pcm = b"".join(buffered_pcm)
-            await send_inbound_pcm(full_pcm, 1)
-            
-            # Close Audio & User block, open Assistant block
-            requests.post(f"{CPP_SERVER_URL}/v1/tts/inject_text", 
-                          json={"text": "<|audio_end|><|im_end|>\n<|im_start|>assistant\n"}, timeout=5)
-            
-            # Send EOT to finalize TCP ingestion
-            writer = await get_inbound_connection()
-            if writer:
-                import struct
-                writer.write(struct.pack('<II', 0, 1)) 
-                await writer.drain()
+
+        # Send user audio embeddings via inbound TCP channel.
+        full_pcm = b"".join(buffered_pcm)
+        # Adaptive wait: longer turns need more time for async prefill to settle before decode.
+        # 16kHz mono int16 => 32000 bytes/sec.
+        audio_duration_sec = len(full_pcm) / 32000.0
+        prefill_wait_sec = min(3.0, max(0.2, audio_duration_sec * 0.15))
+        await send_inbound_pcm(full_pcm, 1)
+
+        # Close only the audio tag; stream_decode() handles user-close + assistant-open.
+        requests.post(f"{CPP_SERVER_URL}/v1/tts/inject_text", 
+                      json={"text": "<|audio_end|>"}, timeout=5)
+
+        # Send EOT to finalize TCP ingestion for this turn.
+        writer = await get_inbound_connection()
+        if writer:
+            import struct
+            writer.write(struct.pack('<II', 0, 1))
+            await writer.drain()
 
     except Exception as e:
         print(f"[Bridge] Injection failed: {e}")
+        if isinstance(e, HTTPException):
+            raise
+        raise HTTPException(status_code=500, detail=f"Voice turn injection failed: {e}")
 
-    await asyncio.sleep(0.5)
+    if prefill_wait_sec > 0:
+        print(f"[Bridge] Waiting {prefill_wait_sec:.2f}s for async prefill (guild={guild_id})")
+        await asyncio.sleep(prefill_wait_sec)
 
     async def audio_streamer():
         global decode_in_progress
@@ -401,8 +438,8 @@ async def trigger_decode(request: Request):
         
         def _trigger():
             try:
-                # 🔧 Trigger decode. round_idx=0 because we reset every turn.
-                requests.post(f"{CPP_SERVER_URL}/v1/stream/decode", json={"round_idx": 0}, timeout=10)
+                # Let C++ own round index progression for multi-turn sessions.
+                requests.post(f"{CPP_SERVER_URL}/v1/stream/decode", json={}, timeout=10)
             except Exception as e:
                 print(f"[Bridge] Trigger failed: {e}")
 

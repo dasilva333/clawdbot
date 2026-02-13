@@ -299,7 +299,13 @@ async def init_sys_prompt(req: InitSysPromptRequest):
             # We open the system block AND the audio tag for the reference voice
             prefix = f"<|im_start|>system\n{prefix}\n<|audio_start|>"
             
-        core_suffix = req.system_prompt_suffix or "You are a helpful and energetic assistant. Answer the user immediately in English. Be direct."
+        core_suffix = req.system_prompt_suffix or (
+            "Your task is to be a helpful assistant using this voice pattern. "
+            "Please answer the user's questions seriously and in a high quality. "
+            "Please chat with the user in a high naturalness style. "
+            "Always speak in English, regardless of the input language. "
+            "Never transcribe or repeat the user's speech verbatim unless explicitly asked."
+        )
         # We close the ref audio tag, add instructions, and close the system block
         # 🔧 Crucially, we do NOT open the user block here, we let the turn logic do it
         suffix = f"<|audio_end|>{core_suffix}<|im_end|>\n"
@@ -391,17 +397,13 @@ async def trigger_decode(request: Request):
     global audio_queue, decode_in_progress
     while not audio_queue.empty(): audio_queue.get_nowait()
 
-    # 3. Inject a user-audio turn.
-    # stream_decode() will append assistant generation prompt; do not open assistant here.
+    # 3. Feed a user-audio turn (audio-only path; no text injection).
+    # stream_decode() appends assistant generation prompt after async prefill completes.
     prefill_wait_sec = 0.1
     try:
         buffered_pcm = guild_audio_buffers.pop(guild_id, [])
         if not buffered_pcm:
             raise HTTPException(status_code=400, detail=f"No buffered audio for guild {guild_id}")
-
-        # Open user audio block.
-        requests.post(f"{CPP_SERVER_URL}/v1/tts/inject_text", 
-                      json={"text": "<|im_start|>user\n<|audio_start|>"}, timeout=5)
 
         # Send user audio embeddings via inbound TCP channel.
         full_pcm = b"".join(buffered_pcm)
@@ -410,10 +412,6 @@ async def trigger_decode(request: Request):
         audio_duration_sec = len(full_pcm) / 32000.0
         prefill_wait_sec = min(3.0, max(0.2, audio_duration_sec * 0.15))
         await send_inbound_pcm(full_pcm, 1)
-
-        # Close only the audio tag; stream_decode() handles user-close + assistant-open.
-        requests.post(f"{CPP_SERVER_URL}/v1/tts/inject_text", 
-                      json={"text": "<|audio_end|>"}, timeout=5)
 
         # Send EOT to finalize TCP ingestion for this turn.
         writer = await get_inbound_connection()

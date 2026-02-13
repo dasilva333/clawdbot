@@ -1,0 +1,159 @@
+{
+  "timestamp": "2026-02-12T23:04:37",
+  "python_bin": "/Users/richardpinedo/Projects/minicpm/demo/web_demo/WebRTC_Demo/venv/bin/python3",
+  "sidecar_script": "/Users/richardpinedo/Projects/minicpm/sidecar_voice_poc/mini_token2wav_sidecar.py",
+  "model_dir": "/Users/richardpinedo/Projects/minicpm/demo/web_demo/WebRTC_Demo/llama.cpp-omni/tools/omni/pyt2w/token2wav",
+  "tokens_dir": "/Users/richardpinedo/Projects/minicpm/demo/web_demo/WebRTC_Demo/llama.cpp-omni/tools/omni/output/round_000/tts_wav",
+  "token_chunk_count": 4,
+  "profiles": [
+    {
+      "status": "ok",
+      "profile": "default_ref",
+      "ref_audio": "/Users/richardpinedo/Projects/minicpm/demo/web_demo/WebRTC_Demo/cpp_server/assets/default_ref_audio.wav",
+      "ready": {
+        "status": "ready",
+        "pid": 90399
+      },
+      "init": {
+        "response": {
+          "status": "ok",
+          "init_ms": 1429.9,
+          "cuda_available": false,
+          "float16": false,
+          "model_dir": "/Users/richardpinedo/Projects/minicpm/demo/web_demo/WebRTC_Demo/llama.cpp-omni/tools/omni/pyt2w/token2wav"
+        },
+        "wall_ms": 3110.74
+      },
+      "set_ref_audio": {
+        "response": {
+          "status": "ok",
+          "set_ref_ms": 565.49,
+          "ref_audio_path": "/Users/richardpinedo/Projects/minicpm/demo/web_demo/WebRTC_Demo/cpp_server/assets/default_ref_audio.wav"
+        },
+        "wall_ms": 565.65
+      },
+      "first_audio_ms_from_first_chunk_send": 447.12,
+      "chunks_wall_ms": 2292.58,
+      "profile_wall_ms": 6527.16,
+      "audio_total_sec": 8.52,
+      "total_samples": 204480,
+      "rtf_chunks_only": 0.269,
+      "rtf_profile_end_to_end": 0.766,
+      "chunk_count": 4,
+      "error": null,
+      "final_wav": "/Users/richardpinedo/Projects/minicpm/sidecar_voice_poc/runs/20260212_230423/default_ref/default_ref.wav",
+      "chunks": [
+        {
+          "chunk_index": 0,
+          "token_file": "/Users/richardpinedo/Projects/minicpm/demo/web_demo/WebRTC_Demo/llama.cpp-omni/tools/omni/output/round_000/tts_wav/audio_tokens_chunk_0.txt",
+          "token_count": 44,
+          "status": "ok",
+          "inference_ms_reported": 445.53,
+          "wall_ms": 446.26,
+          "audio_sec": 1.48,
+          "output_path": "/Users/richardpinedo/Projects/minicpm/sidecar_voice_poc/runs/20260212_230423/default_ref/chunks/chunk_000.wav"
+        },
+        {
+          "chunk_index": 1,
+          "token_file": "/Users/richardpinedo/Projects/minicpm/demo/web_demo/WebRTC_Demo/llama.cpp-omni/tools/omni/output/round_000/tts_wav/audio_tokens_chunk_1.txt",
+          "token_count": 76,
+          "status": "ok",
+          "inference_ms_reported": 714.23,
+          "wall_ms": 715.2,
+          "audio_sec": 2.92,
+          "output_path": "/Users/richardpinedo/Projects/minicpm/sidecar_voice_poc/runs/20260212_230423/default_ref/chunks/chunk_001.wav"
+        },
+        {
+          "chunk_index": 2,
+          "token_file": "/Users/richardpinedo/Projects/minicpm/demo/web_demo/WebRTC_Demo/llama.cpp-omni/tools/omni/output/round_000/tts_wav/audio_tokens_chunk_2.txt",
+          "token_count": 54,
+          "status": "ok",
+          "inference_ms_reported": 596.1,
+          "wall_ms": 597.01,
+          "audio_sec": 2.04,
+          "output_path": "/Users/richardpinedo/Projects/minicpm/sidecar_voice_poc/runs/20260212_230423/default_ref/chunks/chunk_002.wav"
+        },
+        {
+          "chunk_index": 3,
+          "token_file": "/Users/richardpinedo/Projects/minicpm/demo/web_demo/WebRTC_Demo/llama.cpp-omni/tools/omni/output/round_000/tts_wav/audio_tokens_chunk_3.txt",
+          "token_count": 48,
+          "status": "ok",
+          "inference_ms_reported": 533.15,
+          "wall_ms": 534.11,
+          "audio_sec": 2.08,
+          "output_path": "/Users/richardpinedo/Projects/minicpm/sidecar_voice_poc/runs/20260212_230423/default_ref/chunks/chunk_003.wav"
+        }
+      ],
+      "stderr_log": "/Users/richardpinedo/Projects/minicpm/sidecar_voice_poc/runs/20260212_230423/default_ref/sidecar.stderr.log"
+    },
+    {
+      "status": "error",
+      "profile": "elon_ref",
+      "ref_audio": "/Users/richardpinedo/Projects/minicpm/demo/web_demo/WebRTC_Demo/assets/voices/elon_musk_ref.wav",
+      "ready": {
+        "status": "ready",
+        "pid": 90412
+      },
+      "init": {
+        "response": {
+          "status": "ok",
+          "init_ms": 1331.16,
+          "cuda_available": false,
+          "float16": false,
+          "model_dir": "/Users/richardpinedo/Projects/minicpm/demo/web_demo/WebRTC_Demo/llama.cpp-omni/tools/omni/pyt2w/token2wav"
+        },
+        "wall_ms": 3021.15
+      },
+      "set_ref_audio": {
+        "response": {
+          "status": "ok",
+          "set_ref_ms": 2420.0,
+          "ref_audio_path": "/Users/richardpinedo/Projects/minicpm/demo/web_demo/WebRTC_Demo/assets/voices/elon_musk_ref.wav"
+        },
+        "wall_ms": 2420.14
+      },
+      "first_audio_ms_from_first_chunk_send": 532.83,
+      "chunks_wall_ms": 577.05,
+      "profile_wall_ms": 6525.5,
+      "audio_total_sec": 1.48,
+      "total_samples": 35520,
+      "rtf_chunks_only": 0.39,
+      "rtf_profile_end_to_end": 4.409,
+      "chunk_count": 2,
+      "error": {
+        "chunk_index": 1,
+        "response": {
+          "status": "error",
+          "message": "The expanded size of the tensor (1000) must match the existing size (1070) at non-singleton dimension 2.  Target sizes: [2, 8, 1000, 128].  Tensor sizes: [2, 8, 1070, 128]",
+          "traceback": "Traceback (most recent call last):\n  File \"/Users/richardpinedo/Projects/minicpm/sidecar_voice_poc/mini_token2wav_sidecar.py\", line 257, in main\n    resp = sidecar.process(\n        tokens=tokens,\n        last_chunk=bool(req.get(\"last_chunk\", False)),\n        output_path=str(req[\"output_path\"]),\n    )\n  File \"/Users/richardpinedo/Projects/minicpm/sidecar_voice_poc/mini_token2wav_sidecar.py\", line 191, in process\n    wav_data = self.token2wav.stream(\n        generated_speech_tokens=tokens,\n    ...<2 lines>...\n        return_waveform=True,\n    )\n  File \"/Users/richardpinedo/Projects/minicpm/demo/web_demo/WebRTC_Demo/venv/lib/python3.14/site-packages/stepaudio2/token2wav.py\", line 187, in stream\n    chunk_mel, self.stream_cache = self.flow.inference_chunk(\n                                   ~~~~~~~~~~~~~~~~~~~~~~~~~^\n        token=generated_speech_tokens,\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    ...<3 lines>...\n        n_timesteps=self.n_timesteps,\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"/Users/richardpinedo/Projects/minicpm/demo/web_demo/WebRTC_Demo/venv/lib/python3.14/site-packages/torch/utils/_contextlib.py\", line 124, in decorate_context\n    return func(*args, **kwargs)\n  File \"/Users/richardpinedo/Projects/minicpm/demo/web_demo/WebRTC_Demo/venv/lib/python3.14/site-packages/stepaudio2/cosyvoice2/flow/flow.py\", line 211, in inference_chunk\n    feat, estimator_cnn_cache, estimator_att_cache = self.decoder.forward_chunk(\n                                                     ~~~~~~~~~~~~~~~~~~~~~~~~~~^\n        mu = h.transpose(1, 2).contiguous(),\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    ...<5 lines>...\n        att_cache = estimator_att_cache,\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"/Users/richardpinedo/Projects/minicpm/demo/web_demo/WebRTC_Demo/venv/lib/python3.14/site-packages/torch/utils/_contextlib.py\", line 124, in decorate_context\n    return func(*args, **kwargs)\n  File \"/Users/richardpinedo/Projects/minicpm/demo/web_demo/WebRTC_Demo/venv/lib/python3.14/site-packages/stepaudio2/cosyvoice2/flow/flow_matching.py\", line 196, in forward_chunk\n    x, new_cnn_cache, new_att_cache = self.solve_euler_chunk(\n                                      ~~~~~~~~~~~~~~~~~~~~~~^\n        x=z,\n        ^^^^\n    ...<5 lines>...\n        cnn_cache=cnn_cache,\n        ^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"/Users/richardpinedo/Projects/minicpm/demo/web_demo/WebRTC_Demo/venv/lib/python3.14/site-packages/stepaudio2/cosyvoice2/flow/flow_matching.py\", line 149, in solve_euler_chunk\n    dphi_dt, this_new_cnn_cache, this_new_att_cache = self.estimator.forward_chunk(\n                                                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^\n        x = x.repeat(2, 1, 1),\n        ^^^^^^^^^^^^^^^^^^^^^^\n    ...<5 lines>...\n        att_cache = this_att_cache,\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\nRuntimeError: The expanded size of the tensor (1000) must match the existing size (1070) at non-singleton dimension 2.  Target sizes: [2, 8, 1000, 128].  Tensor sizes: [2, 8, 1070, 128]\n"
+        }
+      },
+      "final_wav": "/Users/richardpinedo/Projects/minicpm/sidecar_voice_poc/runs/20260212_230423/elon_ref/elon_ref.wav",
+      "chunks": [
+        {
+          "chunk_index": 0,
+          "token_file": "/Users/richardpinedo/Projects/minicpm/demo/web_demo/WebRTC_Demo/llama.cpp-omni/tools/omni/output/round_000/tts_wav/audio_tokens_chunk_0.txt",
+          "token_count": 44,
+          "status": "ok",
+          "inference_ms_reported": 530.98,
+          "wall_ms": 531.87,
+          "audio_sec": 1.48,
+          "output_path": "/Users/richardpinedo/Projects/minicpm/sidecar_voice_poc/runs/20260212_230423/elon_ref/chunks/chunk_000.wav"
+        },
+        {
+          "chunk_index": 1,
+          "token_file": "/Users/richardpinedo/Projects/minicpm/demo/web_demo/WebRTC_Demo/llama.cpp-omni/tools/omni/output/round_000/tts_wav/audio_tokens_chunk_1.txt",
+          "token_count": 76,
+          "wall_ms": 45.18,
+          "status": "error",
+          "response": {
+            "status": "error",
+            "message": "The expanded size of the tensor (1000) must match the existing size (1070) at non-singleton dimension 2.  Target sizes: [2, 8, 1000, 128].  Tensor sizes: [2, 8, 1070, 128]",
+            "traceback": "Traceback (most recent call last):\n  File \"/Users/richardpinedo/Projects/minicpm/sidecar_voice_poc/mini_token2wav_sidecar.py\", line 257, in main\n    resp = sidecar.process(\n        tokens=tokens,\n        last_chunk=bool(req.get(\"last_chunk\", False)),\n        output_path=str(req[\"output_path\"]),\n    )\n  File \"/Users/richardpinedo/Projects/minicpm/sidecar_voice_poc/mini_token2wav_sidecar.py\", line 191, in process\n    wav_data = self.token2wav.stream(\n        generated_speech_tokens=tokens,\n    ...<2 lines>...\n        return_waveform=True,\n    )\n  File \"/Users/richardpinedo/Projects/minicpm/demo/web_demo/WebRTC_Demo/venv/lib/python3.14/site-packages/stepaudio2/token2wav.py\", line 187, in stream\n    chunk_mel, self.stream_cache = self.flow.inference_chunk(\n                                   ~~~~~~~~~~~~~~~~~~~~~~~~~^\n        token=generated_speech_tokens,\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    ...<3 lines>...\n        n_timesteps=self.n_timesteps,\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"/Users/richardpinedo/Projects/minicpm/demo/web_demo/WebRTC_Demo/venv/lib/python3.14/site-packages/torch/utils/_contextlib.py\", line 124, in decorate_context\n    return func(*args, **kwargs)\n  File \"/Users/richardpinedo/Projects/minicpm/demo/web_demo/WebRTC_Demo/venv/lib/python3.14/site-packages/stepaudio2/cosyvoice2/flow/flow.py\", line 211, in inference_chunk\n    feat, estimator_cnn_cache, estimator_att_cache = self.decoder.forward_chunk(\n                                                     ~~~~~~~~~~~~~~~~~~~~~~~~~~^\n        mu = h.transpose(1, 2).contiguous(),\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    ...<5 lines>...\n        att_cache = estimator_att_cache,\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"/Users/richardpinedo/Projects/minicpm/demo/web_demo/WebRTC_Demo/venv/lib/python3.14/site-packages/torch/utils/_contextlib.py\", line 124, in decorate_context\n    return func(*args, **kwargs)\n  File \"/Users/richardpinedo/Projects/minicpm/demo/web_demo/WebRTC_Demo/venv/lib/python3.14/site-packages/stepaudio2/cosyvoice2/flow/flow_matching.py\", line 196, in forward_chunk\n    x, new_cnn_cache, new_att_cache = self.solve_euler_chunk(\n                                      ~~~~~~~~~~~~~~~~~~~~~~^\n        x=z,\n        ^^^^\n    ...<5 lines>...\n        cnn_cache=cnn_cache,\n        ^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"/Users/richardpinedo/Projects/minicpm/demo/web_demo/WebRTC_Demo/venv/lib/python3.14/site-packages/stepaudio2/cosyvoice2/flow/flow_matching.py\", line 149, in solve_euler_chunk\n    dphi_dt, this_new_cnn_cache, this_new_att_cache = self.estimator.forward_chunk(\n                                                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^\n        x = x.repeat(2, 1, 1),\n        ^^^^^^^^^^^^^^^^^^^^^^\n    ...<5 lines>...\n        att_cache = this_att_cache,\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\nRuntimeError: The expanded size of the tensor (1000) must match the existing size (1070) at non-singleton dimension 2.  Target sizes: [2, 8, 1000, 128].  Tensor sizes: [2, 8, 1070, 128]\n"
+          }
+        }
+      ],
+      "stderr_log": "/Users/richardpinedo/Projects/minicpm/sidecar_voice_poc/runs/20260212_230423/elon_ref/sidecar.stderr.log"
+    }
+  ]
+}

@@ -1,0 +1,4 @@
+runs/**/chunks/
+runs/**/*.wav
+runs/**/*.raw
+runs/**/*.log

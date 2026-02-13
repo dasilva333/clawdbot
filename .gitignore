@@ -28,3 +28,10 @@ demo/web_demo/WebRTC_Demo/llama.cpp-omni/tools/omni/pyt2w/token2wav/*.yaml
 
 # Temp logs
 *.log
+
+# WebRTC demo runtime artifacts
+demo/web_demo/WebRTC_Demo/.pids/
+demo/web_demo/WebRTC_Demo/temp_prefill/
+demo/web_demo/WebRTC_Demo/voice_eval/
+demo/web_demo/WebRTC_Demo/harness_response.*
+demo/web_demo/WebRTC_Demo/debug_tts_output.wav

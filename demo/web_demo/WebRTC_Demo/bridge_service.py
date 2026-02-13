@@ -66,6 +66,32 @@ async def send_inbound_pcm(data: bytes, index: int):
             global inbound_writer
             inbound_writer = None # Reset for reconnect
 
+def _fetch_prefill_status_sync():
+    try:
+        resp = requests.get(f"{CPP_SERVER_URL}/v1/stream/prefill_status", timeout=2)
+        if resp.status_code != 200:
+            return None
+        data = resp.json()
+        if not isinstance(data, dict):
+            return None
+        return data
+    except Exception:
+        return None
+
+async def _await_prefill_ready(previous_seq: int, guild_id: str, timeout_sec: float = 6.0, poll_sec: float = 0.02):
+    deadline = time.monotonic() + timeout_sec
+    while time.monotonic() < deadline:
+        status = await asyncio.to_thread(_fetch_prefill_status_sync)
+        if status and status.get("success") is True:
+            seq = int(status.get("prefill_signal_seq", 0))
+            if seq > previous_seq:
+                return True, seq
+            if status.get("prefill_ready") is True and previous_seq < 0:
+                return True, seq
+        await asyncio.sleep(poll_sec)
+    print(f"[Bridge] Prefill readiness timeout after {timeout_sec:.1f}s (guild={guild_id})")
+    return False, previous_seq
+
 async def handle_tcp_client(reader, writer):
     """Receive audio from Engine -> Bridge."""
     global audio_queue
@@ -230,6 +256,9 @@ async def _collect_tts_pcm(text: str, prompt: Optional[str], temperature: Option
                 current_timeout = 2.0 if received_any else (25.0 - elapsed)
                 chunk = await asyncio.wait_for(audio_queue.get(), timeout=max(0.1, current_timeout))
                 if chunk is None:
+                    # Ignore stale end markers that can arrive before a fresh stream starts.
+                    if not received_any:
+                        continue
                     break
                 received_any = True
                 collected_pcm.append(chunk)
@@ -279,6 +308,9 @@ async def _stream_tts_pcm(text: str, prompt: Optional[str], temperature: Optiona
                 current_timeout = 2.0 if received_any else (25.0 - elapsed)
                 chunk = await asyncio.wait_for(audio_queue.get(), timeout=max(0.1, current_timeout))
                 if chunk is None:
+                    # Ignore stale end markers that can arrive before a fresh stream starts.
+                    if not received_any:
+                        continue
                     break
                 received_any = True
                 # Keep this endpoint raw PCM to match VoiceManager.playStream(..., isRaw=true).
@@ -399,18 +431,20 @@ async def trigger_decode(request: Request):
 
     # 3. Feed a user-audio turn (audio-only path; no text injection).
     # stream_decode() appends assistant generation prompt after async prefill completes.
-    prefill_wait_sec = 0.1
+    prefill_seq_before = -1
+    prefill_status_supported = False
     try:
+        prefill_status = await asyncio.to_thread(_fetch_prefill_status_sync)
+        if prefill_status and prefill_status.get("success") is True:
+            prefill_seq_before = int(prefill_status.get("prefill_signal_seq", 0))
+            prefill_status_supported = True
+
         buffered_pcm = guild_audio_buffers.pop(guild_id, [])
         if not buffered_pcm:
             raise HTTPException(status_code=400, detail=f"No buffered audio for guild {guild_id}")
 
         # Send user audio embeddings via inbound TCP channel.
         full_pcm = b"".join(buffered_pcm)
-        # Adaptive wait: longer turns need more time for async prefill to settle before decode.
-        # 16kHz mono int16 => 32000 bytes/sec.
-        audio_duration_sec = len(full_pcm) / 32000.0
-        prefill_wait_sec = min(3.0, max(0.2, audio_duration_sec * 0.15))
         await send_inbound_pcm(full_pcm, 1)
 
         # Send EOT to finalize TCP ingestion for this turn.
@@ -426,9 +460,12 @@ async def trigger_decode(request: Request):
             raise
         raise HTTPException(status_code=500, detail=f"Voice turn injection failed: {e}")
 
-    if prefill_wait_sec > 0:
-        print(f"[Bridge] Waiting {prefill_wait_sec:.2f}s for async prefill (guild={guild_id})")
-        await asyncio.sleep(prefill_wait_sec)
+    if prefill_status_supported:
+        ready, seq_seen = await _await_prefill_ready(prefill_seq_before, guild_id)
+        if ready:
+            print(f"[Bridge] Prefill ready via signal seq={seq_seen} (guild={guild_id})")
+    else:
+        print(f"[Bridge] Prefill status endpoint unavailable, decoding immediately (guild={guild_id})")
 
     async def audio_streamer():
         global decode_in_progress
@@ -458,7 +495,11 @@ async def trigger_decode(request: Request):
                 try:
                     current_timeout = idle_chunk_timeout_sec if received_any else first_chunk_timeout_sec
                     chunk = await asyncio.wait_for(audio_queue.get(), timeout=current_timeout)
-                    if chunk is None: break
+                    if chunk is None:
+                        # Ignore stale end markers until we have actually started this stream.
+                        if not received_any:
+                            continue
+                        break
                     received_any = True
                     idle_timeouts = 0
                     yield chunk

@@ -6,6 +6,7 @@
 #include <memory>
 #include <vector>
 #include <string>
+#include <cstdint>
 #include <queue>
 #include <mutex>
 #include <condition_variable>
@@ -442,6 +443,10 @@ bool stream_prefill(struct omni_context * ctx_omni,
 bool stream_decode(struct omni_context * ctx_omni,
                         std::string debug_dir,
                         int round_idx = -1);  // round_idx: 由调用方指定的轮次索引，-1 表示使用内部计数
+
+// Stream prefill synchronization status (for bridge readiness gating)
+bool omni_get_prefill_ready();
+uint64_t omni_get_prefill_signal_seq();
 
 bool omni_inject_text(struct omni_context * ctx_omni, std::string text);
 

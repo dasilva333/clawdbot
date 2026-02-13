@@ -3404,6 +3404,8 @@ bool sliding_window_enforce(struct omni_context * ctx_omni) {
 //
 std::condition_variable g_decode_cv;
 bool prefill_done = false;
+std::atomic<bool> g_prefill_ready{false};
+std::atomic<uint64_t> g_prefill_signal_seq{0};
 std::mutex speek_mtx;
 std::condition_variable speek_cv;
 bool last_speek_done_flag = false;
@@ -3524,6 +3526,14 @@ void inbound_tcp_server_thread(struct omni_context * ctx_omni) {
         print_with_timestamp("[Inbound-TCP] Connection closed\n");
     }
     close(server_fd);
+}
+
+bool omni_get_prefill_ready() {
+    return g_prefill_ready.load(std::memory_order_acquire);
+}
+
+uint64_t omni_get_prefill_signal_seq() {
+    return g_prefill_signal_seq.load(std::memory_order_acquire);
 }
 
 void print_with_timestamp(const char* format, ...)
@@ -4445,6 +4455,7 @@ void llm_thread_func(omni_context* ctx_omni, common_params* params){
             
             // 标记前缀填充未完成，防止解码线程过早开始
             prefill_done = false;
+            g_prefill_ready.store(false, std::memory_order_release);
             
             // 步骤1：批量取出队列中的所有嵌入数据
             // 这样可以一次性处理多个嵌入，提高效率
@@ -4586,6 +4597,8 @@ void llm_thread_func(omni_context* ctx_omni, common_params* params){
         if (queue.empty() && ctx_omni->need_speek){
             // 标记前缀填充完成
             prefill_done = true;
+            g_prefill_ready.store(true, std::memory_order_release);
+            g_prefill_signal_seq.fetch_add(1, std::memory_order_acq_rel);
             
             // 如果使用TTS，重置speek_done标志，允许TTS线程开始工作
             if (ctx_omni->use_tts && !ctx_omni->duplex_mode) {
@@ -9235,6 +9248,7 @@ bool stream_decode(struct omni_context * ctx_omni, std::string debug_dir, int ro
         std::unique_lock<std::mutex> lock(ctx_omni->llm_thread_info->mtx);
         g_decode_cv.wait(lock, []{ return prefill_done; });
         prefill_done = false;
+        g_prefill_ready.store(false, std::memory_order_release);
     }
     // 只有启用 TTS 时才设置 speek_done 为 false
     if (ctx_omni->use_tts) {

@@ -5604,6 +5604,7 @@ int main(int argc, char ** argv) {
 
     //
     // Streaming endpoints - POST /v1/stream/prefill | /v1/stream/decode | /v1/stream/omni_init
+    //                     GET  /v1/stream/prefill_status
     //
     // NOTE:
     //  Request bodies follow the semantics used in omni minicpmo flow.
@@ -5683,6 +5684,24 @@ int main(int argc, char ** argv) {
         SRV_INF("%s: handle_stream_prefill\n", __func__);
         json body = json::parse(req.body);
         handle_stream_prefill_impl(body, res);
+    };
+
+    // status: prefill readiness signal for bridge-side decode gating
+    const auto handle_stream_prefill_status = [&ctx_server, &res_ok, &res_error](const httplib::Request &,
+                                                                                  httplib::Response & res) {
+        std::lock_guard<std::mutex> lock(ctx_server.octx_mutex);
+        if (ctx_server.octx == nullptr) {
+            res_error(res, format_error_response("omni context not initialized. call /v1/stream/omni_init first",
+                                                 ERROR_TYPE_INVALID_REQUEST));
+            return;
+        }
+
+        json ack = {
+            { "success",            true                         },
+            { "prefill_ready",      omni_get_prefill_ready()    },
+            { "prefill_signal_seq", omni_get_prefill_signal_seq() }
+        };
+        res_ok(res, ack);
     };
 
     // impl: decode
@@ -6401,6 +6420,7 @@ int main(int argc, char ** argv) {
     svr->Post(params.api_prefix + "/lora-adapters", handle_lora_adapters_apply);
     // Streaming
     svr->Post(params.api_prefix + "/v1/stream/prefill", handle_stream_prefill);
+    svr->Get(params.api_prefix + "/v1/stream/prefill_status", handle_stream_prefill_status);
     svr->Post(params.api_prefix + "/v1/stream/decode", handle_stream_decode);
     svr->Post(params.api_prefix + "/v1/stream/omni_init", handle_stream_omni_init);
     svr->Post(params.api_prefix + "/v1/tts/inject_text", handle_tts_inject_text);

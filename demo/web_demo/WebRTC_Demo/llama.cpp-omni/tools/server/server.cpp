@@ -6289,6 +6289,10 @@ int main(int argc, char ** argv) {
                 const std::string voice_audio = data.at("voice_audio");
                 if (!voice_audio.empty()) {
                     SRV_INF("%s: prefilling voice_audio: %s\n", __func__, voice_audio.c_str());
+                    
+                    // 🔧 Phase 2 FIX: Update ref_audio_path on context so stream_prefill uses it
+                    ctx_server.octx->ref_audio_path = voice_audio;
+                    
                     if (!stream_prefill(ctx_server.octx, voice_audio, /*img*/ "", /*index*/ 0)) {
                         res_error(res, format_error_response("stream_prefill(voice_audio) failed", ERROR_TYPE_SERVER));
                         return;

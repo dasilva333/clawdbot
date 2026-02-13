@@ -24,6 +24,10 @@ This document serves as the source of truth for the project's architectural dire
 - **Implementation**:
     - Integrated turn-taking logic that correctly manages `<|audio_start|>` and `<|audio_end|>` tags.
     - Automatic state management to ensure Turn 2+ does not suffer from KV cache drift or tag bloat.
+- **Wishlist (Do Not Drop)**:
+    - Start playback as soon as the first valid output audio chunks are available; do **not** wait for the full model response to finish before users hear audio.
+    - Reduce end-to-end voice turn latency from current ~16s toward conversational targets (initial audio in under 2s, full reply significantly faster than current baseline).
+    - Keep multi-turn behavior semantic (answering intent), not parroting/transcript echo.
 
 ## 4. Adjustable Voices (Persona/Voice Cloning)
 - **Problem**: Users want specific AI identities (e.g., Jarvis).

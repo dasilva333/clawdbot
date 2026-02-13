@@ -3403,7 +3403,7 @@ bool sliding_window_enforce(struct omni_context * ctx_omni) {
 // omni main
 //
 std::condition_variable g_decode_cv;
-bool prefill_done = true;
+bool prefill_done = false;
 std::mutex speek_mtx;
 std::condition_variable speek_cv;
 bool last_speek_done_flag = false;
@@ -4123,6 +4123,14 @@ struct omni_context * omni_init(struct common_params * params, int media_type, b
         
     // ANE/CoreML warmup: pre-load models into NPU to avoid first-inference latency
     omni_warmup_ane(ctx_omni);
+
+    // 🔧 Phase 2: Start Inbound TCP Server
+    if (!g_inbound_thread_running) {
+        g_inbound_thread_running = true;
+        g_inbound_thread = std::thread(inbound_tcp_server_thread, ctx_omni);
+        g_inbound_thread.detach(); // Detach to let it run independently
+        print_with_timestamp("[Inbound-TCP] Thread started from omni_init\n");
+    }
 
     print_with_timestamp("=== omni_init success: ctx_llama = %p\n", (void*)ctx_omni->ctx_llama);
     return ctx_omni;
@@ -8930,10 +8938,11 @@ bool stream_prefill(struct omni_context * ctx_omni, std::string aud_fname, std::
             // Python: sys_msgs = {"role": "system", "content": [vc_prompt_prefix, ref_audio, vc_prompt_suffix]}
             // 格式: <|im_start|>system\n{vc_prompt_prefix}\n<|audio_start|>[ref_audio_embed]<|audio_end|>{vc_prompt_suffix}<|im_end|>\n
             
-            // 确定 ref_audio 路径：优先使用配置的路径，否则使用默认路径
-            std::string system_ref_audio = ctx_omni->ref_audio_path.empty() 
-                ? "tools/omni/assets/default_ref_audio/default_ref_audio.wav" 
-                : ctx_omni->ref_audio_path;
+            // 确定 ref_audio 路径：优先使用 aud_fname (如果传入)，其次 ctx_omni->ref_audio_path，最后默认路径
+            std::string system_ref_audio = !aud_fname.empty() ? aud_fname : 
+                (ctx_omni->ref_audio_path.empty() 
+                ? "/Users/richardpinedo/Projects/minicpm/demo/web_demo/WebRTC_Demo/cpp_server/assets/default_ref_audio.wav" 
+                : ctx_omni->ref_audio_path);
             print_with_timestamp("system prompt ref_audio: %s\n", system_ref_audio.c_str());
             
             // Step 1: 评估 prefix (voice_clone_prompt，包含 <|audio_start|>)

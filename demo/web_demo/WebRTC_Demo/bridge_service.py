@@ -433,6 +433,12 @@ async def trigger_decode(request: Request):
     async def audio_streamer():
         global decode_in_progress
         decode_in_progress = True
+        stream_started_at = time.time()
+        first_chunk_timeout_sec = 20.0
+        idle_chunk_timeout_sec = 12.0
+        idle_timeout_retries = 2
+        max_stream_duration_sec = 120.0
+        idle_timeouts = 0
         
         def _trigger():
             try:
@@ -446,14 +452,24 @@ async def trigger_decode(request: Request):
         received_any = False
         try:
             while True:
+                if (time.time() - stream_started_at) > max_stream_duration_sec:
+                    print(f"[Bridge] Stream timeout: exceeded {max_stream_duration_sec:.0f}s (guild={guild_id})")
+                    break
                 try:
-                    current_timeout = 5.0 if received_any else 15.0
+                    current_timeout = idle_chunk_timeout_sec if received_any else first_chunk_timeout_sec
                     chunk = await asyncio.wait_for(audio_queue.get(), timeout=current_timeout)
                     if chunk is None: break
                     received_any = True
+                    idle_timeouts = 0
                     yield chunk
                 except asyncio.TimeoutError:
-                    break
+                    if not received_any:
+                        print(f"[Bridge] Stream timeout before first chunk ({first_chunk_timeout_sec:.0f}s) guild={guild_id}")
+                        break
+                    idle_timeouts += 1
+                    if idle_timeouts > idle_timeout_retries:
+                        print(f"[Bridge] Stream idle timeout after {idle_timeouts} waits ({idle_chunk_timeout_sec:.0f}s each) guild={guild_id}")
+                        break
         finally:
             decode_in_progress = False
 

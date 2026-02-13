@@ -171,6 +171,14 @@ async def _ensure_voice_session(guild_id: str, temperature: float = 0.7) -> None
         voice_session_initialized = True
         voice_session_guild_id = guild_id
 
+def _invalidate_voice_session(reason: str) -> None:
+    """Force the next voice decode to reinitialize a clean omni session."""
+    global voice_session_initialized, voice_session_guild_id
+    if voice_session_initialized:
+        print(f"[Bridge] Invalidating voice session (guild={voice_session_guild_id}): {reason}")
+    voice_session_initialized = False
+    voice_session_guild_id = None
+
 def _get_voice_path(voice_id: str) -> Optional[str]:
     if not voice_id or voice_id == "default":
         return DEFAULT_REF_AUDIO
@@ -266,6 +274,9 @@ async def _collect_tts_pcm(text: str, prompt: Optional[str], temperature: Option
                 break
     finally:
         decode_in_progress = False
+        # TTS inject/decode mutates the same backend context used by voice calls.
+        # Force voice path to re-init on next turn to avoid transcript/parrot drift.
+        _invalidate_voice_session("tts request finished")
 
     if not collected_pcm:
         raise HTTPException(status_code=500, detail="Engine produced 0 bytes via TCP")
@@ -319,6 +330,8 @@ async def _stream_tts_pcm(text: str, prompt: Optional[str], temperature: Optiona
                 break
     finally:
         decode_in_progress = False
+        # Keep TTS and voice-call sessions isolated across requests.
+        _invalidate_voice_session("tts stream finished")
 
 @app.post("/omni/init_sys_prompt")
 async def init_sys_prompt(req: InitSysPromptRequest):
@@ -336,7 +349,10 @@ async def init_sys_prompt(req: InitSysPromptRequest):
             "Please answer the user's questions seriously and in a high quality. "
             "Please chat with the user in a high naturalness style. "
             "Always speak in English, regardless of the input language. "
-            "Never transcribe or repeat the user's speech verbatim unless explicitly asked."
+            "Important: treat incoming audio as the user's intent and respond with new content. "
+            "Do not transcribe, quote, or repeat the user's speech verbatim unless explicitly asked. "
+            "Never begin your reply by mirroring the user's sentence. "
+            "If the user asks a question, provide a direct semantic answer instead of repeating the question."
         )
         # We close the ref audio tag, add instructions, and close the system block
         # 🔧 Crucially, we do NOT open the user block here, we let the turn logic do it

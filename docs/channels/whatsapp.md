@@ -305,6 +305,7 @@ WhatsApp can automatically send emoji reactions to incoming messages immediately
 
 - Outbound text is chunked to `channels.whatsapp.textChunkLimit` (default 4000).
 - Optional newline chunking: set `channels.whatsapp.chunkMode="newline"` to split on blank lines (paragraph boundaries) before length chunking.
+- Audio text delivery is controlled by `channels.whatsapp.audioCaptionMode` (`caption`, `separate`, `both`, `off`).
 - Inbound media saves are capped by `channels.whatsapp.mediaMaxMb` (default 50 MB).
 - Outbound media items are capped by `agents.defaults.mediaMaxMb` (default 5 MB).
 
@@ -355,6 +356,7 @@ WhatsApp sends audio as **voice notes** (PTT bubble).
 - `channels.whatsapp.dmPolicy` (DM policy: pairing/allowlist/open/disabled).
 - `channels.whatsapp.selfChatMode` (same-phone setup; bot uses your personal WhatsApp number).
 - `channels.whatsapp.allowFrom` (DM allowlist). WhatsApp uses E.164 phone numbers (no usernames).
+- `channels.whatsapp.audioCaptionMode` (how text is paired with outbound audio replies).
 - `channels.whatsapp.mediaMaxMb` (inbound media save cap).
 - `channels.whatsapp.ackReaction` (auto-reaction on message receipt: `{emoji, direct, group}`).
 - `channels.whatsapp.accounts.<accountId>.*` (per-account settings + optional `authDir`).

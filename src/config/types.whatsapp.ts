@@ -14,6 +14,8 @@ export type WhatsAppActionConfig = {
   polls?: boolean;
 };
 
+export type WhatsAppAudioCaptionMode = "caption" | "separate" | "both" | "off";
+
 export type WhatsAppConfig = {
   /** Optional per-account WhatsApp configuration (multi-account). */
   accounts?: Record<string, WhatsAppAccountConfig>;
@@ -65,6 +67,14 @@ export type WhatsAppConfig = {
   textChunkLimit?: number;
   /** Chunking mode: "length" (default) splits by size; "newline" splits on every newline. */
   chunkMode?: "length" | "newline";
+  /**
+   * How WhatsApp audio replies include text:
+   * - "caption": keep text as media caption (default)
+   * - "separate": send text as a standalone message before audio
+   * - "both": send standalone text and media caption
+   * - "off": send audio without text
+   */
+  audioCaptionMode?: WhatsAppAudioCaptionMode;
   /** Maximum media file size in MB. Default: 50. */
   mediaMaxMb?: number;
   /** Disable block streaming for this account. */
@@ -137,6 +147,8 @@ export type WhatsAppAccountConfig = {
   textChunkLimit?: number;
   /** Chunking mode: "length" (default) splits by size; "newline" splits on every newline. */
   chunkMode?: "length" | "newline";
+  /** Per-account override for audio text delivery mode. */
+  audioCaptionMode?: WhatsAppAudioCaptionMode;
   mediaMaxMb?: number;
   blockStreaming?: boolean;
   /** Merge streamed block replies before sending. */

@@ -367,6 +367,7 @@ export async function processMessage(params: {
           chunkMode,
           replyLogger: params.replyLogger,
           connectionId: params.connectionId,
+          audioCaptionMode: params.cfg.channels?.whatsapp?.audioCaptionMode,
           // Tool + block updates are noisy; skip their log lines.
           skipLog: info.kind !== "final",
           tableMode,

@@ -510,11 +510,21 @@ For groups, use `channels.whatsapp.groupPolicy` + `channels.whatsapp.groupAllowF
       allowFrom: ["+15555550123", "+447700900123"],
       textChunkLimit: 4000, // optional outbound chunk size (chars)
       chunkMode: "length", // optional chunking mode (length | newline)
+      audioCaptionMode: "separate", // optional audio text mode (caption | separate | both | off)
       mediaMaxMb: 50, // optional inbound media cap (MB)
     },
   },
 }
 ```
+
+### `channels.whatsapp.audioCaptionMode`
+
+Controls how WhatsApp audio replies include text:
+
+- `"caption"` (default): attach text as the audio message caption
+- `"separate"`: send text as a normal message before the audio
+- `"both"`: send both standalone text and caption
+- `"off"`: send audio without text
 
 ### `channels.whatsapp.sendReadReceipts`
 

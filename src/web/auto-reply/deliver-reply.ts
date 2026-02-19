@@ -1,5 +1,6 @@
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { MarkdownTableMode } from "../../config/types.base.js";
+import type { WhatsAppAudioCaptionMode } from "../../config/types.whatsapp.js";
 import type { WebInboundMsg } from "./types.js";
 import { chunkMarkdownTextWithMode, type ChunkMode } from "../../auto-reply/chunk.js";
 import { logVerbose, shouldLogVerbose } from "../../globals.js";
@@ -10,6 +11,12 @@ import { newConnectionId } from "../reconnect.js";
 import { formatError } from "../session.js";
 import { whatsappOutboundLog } from "./loggers.js";
 import { elide } from "./util.js";
+
+function resolveAudioCaptionMode(
+  mode: WhatsAppAudioCaptionMode | undefined,
+): WhatsAppAudioCaptionMode {
+  return mode ?? "caption";
+}
 
 export async function deliverWebReply(params: {
   replyResult: ReplyPayload;
@@ -24,6 +31,7 @@ export async function deliverWebReply(params: {
   connectionId?: string;
   skipLog?: boolean;
   tableMode?: MarkdownTableMode;
+  audioCaptionMode?: WhatsAppAudioCaptionMode;
 }) {
   const { replyResult, msg, maxMediaBytes, textLimit, replyLogger, connectionId, skipLog } = params;
   const replyStarted = Date.now();
@@ -91,10 +99,11 @@ export async function deliverWebReply(params: {
   }
 
   const remainingText = [...textChunks];
+  const audioCaptionMode = resolveAudioCaptionMode(params.audioCaptionMode);
 
   // Media (with optional caption on first item)
   for (const [index, mediaUrl] of mediaList.entries()) {
-    const caption = index === 0 ? remainingText.shift() || undefined : undefined;
+    const firstTextChunk = index === 0 ? remainingText.shift() || undefined : undefined;
     try {
       const media = await loadWebMedia(mediaUrl, maxMediaBytes);
       if (shouldLogVerbose()) {
@@ -102,6 +111,21 @@ export async function deliverWebReply(params: {
           `Web auto-reply media size: ${(media.buffer.length / (1024 * 1024)).toFixed(2)}MB`,
         );
         logVerbose(`Web auto-reply media source: ${mediaUrl} (kind ${media.kind})`);
+      }
+      let caption = firstTextChunk;
+      let sendStandaloneText = false;
+      if (media.kind === "audio") {
+        if (audioCaptionMode === "off") {
+          caption = undefined;
+        } else if (audioCaptionMode === "separate") {
+          caption = undefined;
+          sendStandaloneText = Boolean(firstTextChunk);
+        } else if (audioCaptionMode === "both") {
+          sendStandaloneText = Boolean(firstTextChunk);
+        }
+      }
+      if (sendStandaloneText && firstTextChunk) {
+        await sendWithRetry(() => msg.reply(firstTextChunk), "text:audio");
       }
       if (media.kind === "image") {
         await sendWithRetry(
@@ -171,7 +195,9 @@ export async function deliverWebReply(params: {
       if (index === 0) {
         const warning =
           err instanceof Error ? `⚠️ Media failed: ${err.message}` : "⚠️ Media failed.";
-        const fallbackTextParts = [remainingText.shift() ?? caption ?? "", warning].filter(Boolean);
+        const fallbackTextParts = [remainingText.shift() ?? firstTextChunk ?? "", warning].filter(
+          Boolean,
+        );
         const fallbackText = fallbackTextParts.join("\n");
         if (fallbackText) {
           whatsappOutboundLog.warn(`Media skipped; sent text-only to ${msg.from}`);

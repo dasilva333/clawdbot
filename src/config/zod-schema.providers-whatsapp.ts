@@ -10,6 +10,7 @@ import {
 } from "./zod-schema.core.js";
 
 const ToolPolicyBySenderSchema = z.record(z.string(), ToolPolicySchema).optional();
+const WhatsAppAudioCaptionModeSchema = z.enum(["caption", "separate", "both", "off"]).optional();
 
 export const WhatsAppAccountSchema = z
   .object({
@@ -33,6 +34,7 @@ export const WhatsAppAccountSchema = z
     dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
     textChunkLimit: z.number().int().positive().optional(),
     chunkMode: z.enum(["length", "newline"]).optional(),
+    audioCaptionMode: WhatsAppAudioCaptionModeSchema,
     mediaMaxMb: z.number().int().positive().optional(),
     blockStreaming: z.boolean().optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
@@ -95,6 +97,7 @@ export const WhatsAppConfigSchema = z
     dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
     textChunkLimit: z.number().int().positive().optional(),
     chunkMode: z.enum(["length", "newline"]).optional(),
+    audioCaptionMode: WhatsAppAudioCaptionModeSchema,
     mediaMaxMb: z.number().int().positive().optional().default(50),
     blockStreaming: z.boolean().optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),

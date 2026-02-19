@@ -55,8 +55,22 @@ export async function runExec(
     }
     return { stdout, stderr };
   } catch (err) {
-    if (shouldLogVerbose()) {
-      logError(danger(`Command failed: ${command} ${args.join(" ")}`));
+    const execErr = err as { stderr?: string; stdout?: string; killed?: boolean; signal?: string };
+    logError(danger(`Command failed: ${command} ${args.join(" ")}`));
+    if (execErr.killed || execErr.signal === "SIGTERM") {
+      logError(
+        danger(
+          `  → Process was killed (likely timeout after ${typeof opts === "number" ? opts : ((opts as any).timeoutMs ?? "?")}ms)`,
+        ),
+      );
+    }
+    if (execErr.stderr) {
+      const truncated = execErr.stderr.trim().slice(0, 500);
+      logError(danger(`  → stderr: ${truncated}`));
+    }
+    if (execErr.stdout) {
+      const truncated = execErr.stdout.trim().slice(0, 500);
+      logError(danger(`  → stdout (tail): ${truncated.slice(-300)}`));
     }
     throw err;
   }

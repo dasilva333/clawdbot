@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import type { DmPolicy, GroupPolicy, WhatsAppAccountConfig } from "../config/types.js";
+import type { WhatsAppAudioCaptionMode } from "../config/types.whatsapp.js";
 import { resolveOAuthDir } from "../config/paths.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
@@ -22,6 +23,7 @@ export type ResolvedWhatsAppAccount = {
   dmPolicy?: DmPolicy;
   textChunkLimit?: number;
   chunkMode?: "length" | "newline";
+  audioCaptionMode?: WhatsAppAudioCaptionMode;
   mediaMaxMb?: number;
   blockStreaming?: boolean;
   ackReaction?: WhatsAppAccountConfig["ackReaction"];
@@ -161,6 +163,7 @@ export function resolveWhatsAppAccount(params: {
     groupPolicy: accountCfg?.groupPolicy ?? rootCfg?.groupPolicy,
     textChunkLimit: accountCfg?.textChunkLimit ?? rootCfg?.textChunkLimit,
     chunkMode: accountCfg?.chunkMode ?? rootCfg?.chunkMode,
+    audioCaptionMode: accountCfg?.audioCaptionMode ?? rootCfg?.audioCaptionMode,
     mediaMaxMb: accountCfg?.mediaMaxMb ?? rootCfg?.mediaMaxMb,
     blockStreaming: accountCfg?.blockStreaming ?? rootCfg?.blockStreaming,
     ackReaction: accountCfg?.ackReaction ?? rootCfg?.ackReaction,

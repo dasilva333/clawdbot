@@ -1,6 +1,6 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { resolveWhatsAppAuthDir } from "./accounts.js";
+import { resolveWhatsAppAccount, resolveWhatsAppAuthDir } from "./accounts.js";
 
 describe("resolveWhatsAppAuthDir", () => {
   const stubCfg = { channels: { whatsapp: { accounts: {} } } } as Parameters<
@@ -43,5 +43,39 @@ describe("resolveWhatsAppAuthDir", () => {
       accountId: "my-account-1",
     });
     expect(authDir).toMatch(/whatsapp[/\\]my-account-1$/);
+  });
+
+  it("inherits root audioCaptionMode when account override is missing", () => {
+    const cfg = {
+      channels: {
+        whatsapp: {
+          audioCaptionMode: "separate",
+          accounts: {
+            default: {},
+          },
+        },
+      },
+    } as Parameters<typeof resolveWhatsAppAccount>[0]["cfg"];
+
+    const resolved = resolveWhatsAppAccount({ cfg, accountId: "default" });
+    expect(resolved.audioCaptionMode).toBe("separate");
+  });
+
+  it("prefers per-account audioCaptionMode over root value", () => {
+    const cfg = {
+      channels: {
+        whatsapp: {
+          audioCaptionMode: "caption",
+          accounts: {
+            default: {
+              audioCaptionMode: "both",
+            },
+          },
+        },
+      },
+    } as Parameters<typeof resolveWhatsAppAccount>[0]["cfg"];
+
+    const resolved = resolveWhatsAppAccount({ cfg, accountId: "default" });
+    expect(resolved.audioCaptionMode).toBe("both");
   });
 });
